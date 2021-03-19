@@ -22,6 +22,8 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  *********************************************************************/
+#include "bacnet/basic/object/ai.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -259,8 +261,12 @@ int main(int argc, char *argv[])
     last_seconds = time(NULL);
     /* broadcast an I-Am on startup */
     Send_I_Am(&Handler_Transmit_Buffer[0]);
+
+    float count = 0;
+    float value;
     /* loop forever */
     for (;;) {
+        count++;
         /* input */
         current_seconds = time(NULL);
 
@@ -298,6 +304,13 @@ int main(int argc, char *argv[])
             address_cache_timer(address_binding_tmr);
             address_binding_tmr = 0;
         }
+
+        value = count % 100;
+
+        Analog_Input_Present_Value_Set(0, value);
+
+
+
 #if defined(INTRINSIC_REPORTING)
         /* try to find addresses of recipients */
         recipient_scan_tmr += elapsed_seconds;
