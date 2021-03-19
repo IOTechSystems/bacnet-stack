@@ -263,7 +263,7 @@ int main(int argc, char *argv[])
     Send_I_Am(&Handler_Transmit_Buffer[0]);
 
     float count = 0;
-    float value;
+
     /* loop forever */
     for (;;) {
         count++;
@@ -305,9 +305,7 @@ int main(int argc, char *argv[])
             address_binding_tmr = 0;
         }
 
-        value = count % 100;
-
-        Analog_Input_Present_Value_Set(0, value);
+        Analog_Input_Present_Value_Set(0, count);
 
 
 
