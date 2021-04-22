@@ -253,7 +253,7 @@ bool Analog_Output_Object_Name(
 
     if (object_instance < MAX_ANALOG_OUTPUTS) {
         sprintf(
-            text_string, "ANALOG OUTPUT %lu", (unsigned long)object_instance);
+            text_string, "ANALOG OUTPUT");
         status = characterstring_init_ansi(object_name, text_string);
     }
 

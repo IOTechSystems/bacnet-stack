@@ -266,7 +266,7 @@ bool Analog_Input_Object_Name(
 
     index = Analog_Input_Instance_To_Index(object_instance);
     if (index < AI_Descr_Size) {
-        sprintf(text_string, "ANALOG INPUT %lu", (unsigned long)index);
+        sprintf(text_string, "ANALOG INPUT");
         status = characterstring_init_ansi(object_name, text_string);
     }
 
