@@ -291,8 +291,6 @@ bool Analog_Value_Object_Name(
     bool status = false;
 
     if (object_instance < MAX_ANALOG_VALUES) {
-        sprintf(
-            text_string, "ANALOG VALUE %lu", (unsigned long)object_instance);
         status = characterstring_init_ansi(object_name, text_string);
     }
 
