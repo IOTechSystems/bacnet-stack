@@ -31,6 +31,7 @@
 #include "bacnet/bacdef.h"
 #include "bacnet/npdu.h"
 #include "bacnet/datalink/bvlc.h"
+#include "bacnet/datalink/datalink.h"
 
 /* specific defines for BACnet/IP over Ethernet */
 #define BIP_HEADER_MAX (1 + 1 + 2)
@@ -78,7 +79,8 @@ extern "C" {
     uint16_t bip_receive(BACNET_ADDRESS *src,
         uint8_t *pdu,
         uint16_t max_pdu,
-        unsigned timeout);
+        unsigned timeout,
+        dl_rc *rc);
 
     /* use host byte order for setting UDP port */
     BACNET_STACK_EXPORT

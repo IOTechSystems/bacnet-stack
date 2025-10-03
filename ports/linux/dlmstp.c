@@ -237,12 +237,14 @@ int dlmstp_send_pdu(BACNET_ADDRESS *dest, /* destination address */
 uint16_t dlmstp_receive(BACNET_ADDRESS *src, /* source address */
     uint8_t *pdu, /* PDU data */
     uint16_t max_pdu, /* amount of space available in the PDU  */
-    unsigned timeout)
+    unsigned timeout,
+    dl_rc *rc)
 { /* milliseconds to wait for a packet */
     uint16_t pdu_len = 0;
     struct timespec abstime;
 
     (void)max_pdu;
+    if (rc) *rc = DL_OK;
     /* see if there is a packet available, and a place
        to put the reply (if necessary) and process it */
     pthread_mutex_lock(&Receive_Packet_Mutex);
@@ -261,7 +263,15 @@ uint16_t dlmstp_receive(BACNET_ADDRESS *src, /* source address */
             }
             pdu_len = Receive_Packet.pdu_len;
         }
+        else
+        {
+          if (rc) *rc = DL_RCV_NODATA;
+        }
         Receive_Packet.ready = false;
+    }
+    else
+    {
+      if (rc) *rc = DL_SEL_TIMEOUT;
     }
     pthread_mutex_unlock(&Receive_Packet_Mutex);
 

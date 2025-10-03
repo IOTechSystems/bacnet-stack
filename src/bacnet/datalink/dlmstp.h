@@ -30,6 +30,7 @@
 #include "bacnet/bacnet_stack_exports.h"
 #include "bacnet/bacdef.h"
 #include "bacnet/npdu.h"
+#include "bacnet/datalink/datalink.h"
 
 /* defines specific to MS/TP */
 /* preamble+type+dest+src+len+crc8+crc16 */
@@ -72,7 +73,8 @@ extern "C" {
         BACNET_ADDRESS * src,   /* source address */
         uint8_t * pdu,  /* PDU data */
         uint16_t max_pdu,       /* amount of space available in the PDU  */
-        unsigned timeout);      /* milliseconds to wait for a packet */
+        unsigned timeout,       /* milliseconds to wait for a packet */
+        dl_rc *rc);
 
     /* This parameter represents the value of the Max_Info_Frames property of */
     /* the node's Device object. The value of Max_Info_Frames specifies the */

@@ -302,7 +302,7 @@ int bip_send_mpdu(BACNET_IP_ADDRESS *dest, uint8_t *mtu, uint16_t mtu_len)
  * @return Number of bytes received, or 0 if none or timeout.
  */
 uint16_t bip_receive(
-    BACNET_ADDRESS *src, uint8_t *npdu, uint16_t max_npdu, unsigned timeout)
+    BACNET_ADDRESS *src, uint8_t *npdu, uint16_t max_npdu, unsigned timeout, dl_rc *rc)
 {
     uint16_t npdu_len = 0; /* return value */
     fd_set read_fds;
@@ -315,8 +315,11 @@ uint16_t bip_receive(
     int offset = 0;
     uint16_t i = 0;
 
+    if (rc) *rc = DL_OK;
+
     /* Make sure the socket is open */
     if (BIP_Socket < 0) {
+        if (rc) *rc = DL_UNINIT;
         return 0;
     }
     /* we could just use a non-blocking socket, but that consumes all
@@ -334,22 +337,27 @@ uint16_t bip_receive(
     FD_SET(BIP_Socket, &read_fds);
     max = BIP_Socket;
     /* see if there is a packet for us */
-    if (select(max + 1, &read_fds, NULL, NULL, &select_timeout) > 0) {
+    int s = select(max + 1, &read_fds, NULL, NULL, &select_timeout);
+    if (s > 0) {
         received_bytes = recvfrom(max, (char *)&npdu[0], max_npdu, 0,
             (struct sockaddr *)&sin, &sin_len);
     } else {
+        if (rc) *rc = (s == 0 ? DL_SEL_TIMEOUT : DL_SEL_ERROR);
         return 0;
     }
     /* See if there is a problem */
     if (received_bytes < 0) {
+        if (rc) *rc = DL_RCV_ERROR;
         return 0;
     }
     /* no problem, just no bytes */
     if (received_bytes == 0) {
+        if (rc) *rc = DL_RCV_NODATA;
         return 0;
     }
     /* the signature of a BACnet/IPv packet */
     if (npdu[0] != BVLL_TYPE_BACNET_IP) {
+        if (rc) *rc = DL_RCV_NOTBACNET;
         return 0;
     }
     /* Erase up to 16 bytes after the received bytes as safety margin to
@@ -388,6 +396,7 @@ uint16_t bip_receive(
                 fprintf(stderr, "BIP: NPDU dropped!\n");
                 fflush(stderr);
             }
+            if (rc) *rc = DL_RCV_TOOLONG;
             npdu_len = 0;
         }
     }

@@ -28,6 +28,17 @@
 #include "bacnet/config.h"
 #include "bacnet/bacdef.h"
 
+typedef enum {
+  DL_OK = 0,
+  DL_UNINIT,
+  DL_SEL_TIMEOUT,
+  DL_SEL_ERROR,
+  DL_RCV_ERROR,
+  DL_RCV_NODATA,
+  DL_RCV_NOTBACNET,
+  DL_RCV_TOOLONG
+} dl_rc;
+
 #if defined(BACDL_ETHERNET)
 #include "bacnet/datalink/ethernet.h"
 
