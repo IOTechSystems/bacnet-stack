@@ -432,53 +432,6 @@ uint32_t bacfile_instance(char *filename)
     return instance;
 }
 
-#if MAX_TSM_TRANSACTIONS
-/* this is one way to match up the invoke ID with */
-/* the file ID from the AtomicReadFile request. */
-/* Another way would be to store the */
-/* invokeID and file instance in a list or table */
-/* when the request was sent */
-uint32_t bacfile_instance_from_tsm(uint8_t invokeID)
-{
-    BACNET_NPDU_DATA npdu_data = { 0 }; /* dummy for getting npdu length */
-    BACNET_CONFIRMED_SERVICE_DATA service_data = { 0 };
-    uint8_t service_choice = 0;
-    uint8_t *service_request = NULL;
-    uint16_t service_request_len = 0;
-    BACNET_ADDRESS dest; /* where the original packet was destined */
-    uint8_t apdu[MAX_PDU] = { 0 }; /* original APDU packet */
-    uint16_t apdu_len = 0; /* original APDU packet length */
-    int len = 0; /* apdu header length */
-    BACNET_ATOMIC_READ_FILE_DATA data = { 0 };
-    uint32_t object_instance = BACNET_MAX_INSTANCE + 1; /* return value */
-    bool found = false;
-
-    found = tsm_get_transaction_pdu(
-        invokeID, &dest, &npdu_data, &apdu[0], &apdu_len);
-    if (found) {
-        if (!npdu_data.network_layer_message &&
-            npdu_data.data_expecting_reply &&
-            (apdu[0] == PDU_TYPE_CONFIRMED_SERVICE_REQUEST)) {
-            len = apdu_decode_confirmed_service_request(&apdu[0], apdu_len,
-                &service_data, &service_choice, &service_request,
-                &service_request_len);
-            if ((len > 0) &&
-                (service_choice == SERVICE_CONFIRMED_ATOMIC_READ_FILE)) {
-                len = arf_decode_service_request(
-                    service_request, service_request_len, &data);
-                if (len > 0) {
-                    if (data.object_type == OBJECT_FILE) {
-                        object_instance = data.object_instance;
-                    }
-                }
-            }
-        }
-    }
-
-    return object_instance;
-}
-#endif
-
 bool bacfile_read_stream_data(BACNET_ATOMIC_READ_FILE_DATA *data)
 {
     char *pFilename = NULL;

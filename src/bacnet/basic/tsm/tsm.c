@@ -62,13 +62,6 @@ uint8_t Handler_Transmit_Buffer[MAX_PDU] = { 0 };
 
 /* FIXME: not coded for segmentation */
 
-static tsm_timeout_function Timeout_Function;
-
-void tsm_set_timeout_handler(tsm_timeout_function pFunction)
-{
-    Timeout_Function = pFunction;
-}
-
 /** Get TSM Device using bacnet address and return tsm device.
  *  NOTE: Requires linking with BACnet device service to use this function
  *
@@ -237,107 +230,12 @@ void tsm_set_confirmed_unsegmented_transaction(uint8_t invokeID,
             /* start the timer */
             plist->RequestTimer = apdu_timeout();
             /* copy the data */
-            memcpy (plist->apdu, apdu, apdu_len);
-            plist->apdu_len = apdu_len;
             npdu_copy_data(&plist->npdu_data, ndpu_data);
             bacnet_address_copy(&plist->dest, dest);
         }
     }
 DONE:
     return;
-}
-
-/** Used to retrieve the transaction payload. Used
- *  if we wanted to find out what we sent (i.e. when
- *  we get an ack).
- *
- * @param invokeID  Invoke-ID
- * @param dest  Pointer to the BACnet destination address.
- * @param ndpu_data  Pointer to the NPDU structure.
- * @param apdu  Pointer to the received message.
- * @param apdu_len  Pointer to a variable, that takes
- *                  the count of bytes valid in the
- *                  received message.
- */
-bool tsm_get_transaction_pdu(uint8_t invokeID,
-    BACNET_ADDRESS *dest,
-    BACNET_NPDU_DATA *ndpu_data,
-    uint8_t *apdu,
-    uint16_t *apdu_len)
-{
-    uint8_t index;
-    bool found = false;
-    BACNET_TSM_DATA *plist;
-
-    tsm_device_t *tsm_device = get_tsm_device (dest);
-    if (!tsm_device) goto DONE;
-
-    if (invokeID && apdu && ndpu_data && apdu_len) {
-        index = tsm_find_invokeID_index(tsm_device, invokeID);
-        /* how much checking is needed?  state?  dest match? just invokeID? */
-        if (index < MAX_TSM_TRANSACTIONS) {
-            /* FIXME: we may want to free the transaction so it doesn't timeout
-             */
-            /* retrieve the transaction */
-            plist = &tsm_device->TSM_List[index];
-            *apdu_len = (uint16_t)plist->apdu_len;
-            if (*apdu_len > MAX_PDU) {
-                *apdu_len = MAX_PDU;
-            }
-            memcpy (apdu, plist->apdu, *apdu_len);
-            npdu_copy_data(ndpu_data, &plist->npdu_data);
-            bacnet_address_copy(dest, &plist->dest);
-            found = true;
-        }
-    }
-DONE:
-    return found;
-}
-
-/** Called once a millisecond or slower.
- *  This function calls the handler for a
- *  timeout 'Timeout_Function', if neccessary.
- *
- * @param address  BACnet address of device
- *
- * @param milliseconds - Count of milliseconds passed, since the last call.
- */
-void tsm_timer_milliseconds(BACNET_ADDRESS *address, uint16_t milliseconds)
-{
-    unsigned i = 0; /* counter */
-
-    tsm_device_t *tsm_device = get_tsm_device(address);
-    if (!tsm_device) return;
-    BACNET_TSM_DATA *plist = &tsm_device->TSM_List[0];
-
-    for (i = 0; i < MAX_TSM_TRANSACTIONS; i++, plist++) {
-        if (plist->state == TSM_STATE_AWAIT_CONFIRMATION) {
-            if (plist->RequestTimer > milliseconds) {
-                plist->RequestTimer -= milliseconds;
-            } else {
-                plist->RequestTimer = 0;
-            }
-            /* AWAIT_CONFIRMATION */
-            if (plist->RequestTimer == 0) {
-                if (plist->RetryCount < apdu_retries()) {
-                    plist->RequestTimer = apdu_timeout();
-                    plist->RetryCount++;
-                    datalink_send_pdu(&plist->dest, &plist->npdu_data,
-                        &plist->apdu[0], plist->apdu_len);
-                } else {
-                    /* note: the invoke id has not been cleared yet
-                       and this indicates a failed message:
-                       IDLE and a valid invoke id */
-                    plist->state = TSM_STATE_IDLE;
-                    if (plist->InvokeID != 0) {
-                        if (Timeout_Function) {
-                            Timeout_Function(plist->InvokeID);
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 /** Frees the invokeID and sets its state to IDLE

@@ -73,14 +73,6 @@ extern "C" {
     BACNET_STACK_EXPORT
     uint32_t bacfile_instance(
         char *filename);
-    /* this is one way to match up the invoke ID with */
-    /* the file ID from the AtomicReadFile request. */
-    /* Another way would be to store the */
-    /* invokeID and file instance in a list or table */
-    /* when the request was sent */
-    BACNET_STACK_EXPORT
-    uint32_t bacfile_instance_from_tsm(
-        uint8_t invokeID);
 
     /* handler ACK helper */
     BACNET_STACK_EXPORT

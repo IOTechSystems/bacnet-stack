@@ -175,8 +175,6 @@ add_library(${PROJECT_NAME}-${API_VERSION}
     src/bacnet/basic/service/h_alarm_ack.h
     src/bacnet/basic/service/h_apdu.c
     src/bacnet/basic/service/h_apdu.h
-    src/bacnet/basic/service/h_arf_a.c
-    src/bacnet/basic/service/h_arf_a.h
     src/bacnet/basic/service/h_arf.c
     src/bacnet/basic/service/h_arf.h
     src/bacnet/basic/service/h_awf.c
