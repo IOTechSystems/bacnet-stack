@@ -42,8 +42,8 @@ extern "C" {
     {
         BACNET_CHARACTER_STRING Present_Value;
         bool Out_Of_Service;
-        char Object_Name[64];
-        char Object_Description[64];
+        char *Object_Name;
+        char *Object_Description;
     } CHARACTER_STRING_VALUE_DESCR;
 
     BACNET_STACK_EXPORT

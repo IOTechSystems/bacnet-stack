@@ -26,6 +26,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
@@ -40,6 +42,7 @@
 
 static SCHEDULE_DESCR *Schedule_Descr = NULL;
 static size_t Schedule_Descr_Size = 0;
+static pthread_mutex_t Schedule_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const int Schedule_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
     PROP_OBJECT_NAME, PROP_OBJECT_TYPE, PROP_PRESENT_VALUE,
@@ -47,7 +50,7 @@ static const int Schedule_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
     PROP_LIST_OF_OBJECT_PROPERTY_REFERENCES, PROP_PRIORITY_FOR_WRITING,
     PROP_STATUS_FLAGS, PROP_RELIABILITY, PROP_OUT_OF_SERVICE, -1 };
 
-static const int Schedule_Properties_Optional[] = { PROP_WEEKLY_SCHEDULE, -1 };
+static const int Schedule_Properties_Optional[] = { PROP_WEEKLY_SCHEDULE, PROP_DESCRIPTION, -1 };
 
 static const int Schedule_Properties_Proprietary[] = { -1 };
 
@@ -74,14 +77,34 @@ void Schedule_Resize(size_t new_size)
 
 void Schedule_Add(size_t count)
 {
-    Schedule_Resize(Schedule_Descr_Size + count);
+    size_t new_size = Schedule_Descr_Size + count;
+
+    pthread_mutex_lock(&Schedule_Mutex);
+    SCHEDULE_DESCR *tmp = realloc(Schedule_Descr, sizeof(*Schedule_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&Schedule_Mutex);
+        return;
+    }
+    Schedule_Descr = tmp;
+    Schedule_Descr_Size = new_size;
+    pthread_mutex_unlock(&Schedule_Mutex);
+
+    Schedule_Objects_Init();
 }
 
 void Schedule_Free(void)
 {
+    if (NULL == Schedule_Descr) return;
+
+    pthread_mutex_lock(&Schedule_Mutex);
+    for (unsigned i = 0; i < Schedule_Descr_Size; i++) {
+        free(Schedule_Descr[i].Object_Name);
+        free(Schedule_Descr[i].Description);
+    }
     free(Schedule_Descr);
     Schedule_Descr = NULL;
     Schedule_Descr_Size = 0;
+    pthread_mutex_unlock(&Schedule_Mutex);
 }
 
 void Schedule_Alloc(size_t size)
@@ -118,6 +141,8 @@ void Schedule_Objects_Init()
         psched->obj_prop_ref_cnt = 0; /* no references, add as needed */
         psched->Priority_For_Writing = 16; /* lowest priority */
         psched->Out_Of_Service = false;
+        psched->Object_Name = NULL;
+        psched->Description = NULL;
     }
 }
 
@@ -172,15 +197,78 @@ bool Schedule_Object_Name(
 {
     static char text_string[32] = ""; /* okay for single thread */
     unsigned int index;
+
+    index = Schedule_Instance_To_Index(object_instance);
+    if (index >= Schedule_Descr_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Schedule_Mutex);
+    if (NULL != Schedule_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", Schedule_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "SCHEDULE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Schedule_Mutex);
+
+    return characterstring_init_ansi(object_name, text_string);
+}
+
+bool Schedule_Name_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == Schedule_Descr) return false;
+    unsigned index = Schedule_Instance_To_Index(object_instance);
+    if (index >= Schedule_Descr_Size) return false;
+
+    pthread_mutex_lock(&Schedule_Mutex);
+    free(Schedule_Descr[index].Object_Name);
+    Schedule_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (Schedule_Descr[index].Object_Name) {
+        strcpy(Schedule_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&Schedule_Mutex);
+    return true;
+}
+
+bool Schedule_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
     bool status = false;
 
     index = Schedule_Instance_To_Index(object_instance);
-    if (index < Schedule_Descr_Size) {
-        sprintf(text_string, "SCHEDULE %lu", (unsigned long)index);
-        status = characterstring_init_ansi(object_name, text_string);
+    if (index >= Schedule_Descr_Size) {
+        return status;
     }
 
+    pthread_mutex_lock(&Schedule_Mutex);
+    if (NULL != Schedule_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", Schedule_Descr[index].Description);
+    } else {
+        sprintf(text_string, "SCHEDULE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Schedule_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
     return status;
+}
+
+bool Schedule_Description_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == Schedule_Descr) return false;
+    unsigned index = Schedule_Instance_To_Index(object_instance);
+    if (index >= Schedule_Descr_Size) return false;
+
+    pthread_mutex_lock(&Schedule_Mutex);
+    free(Schedule_Descr[index].Description);
+    Schedule_Descr[index].Description = calloc(strlen(new_name) + 1, sizeof(char));
+    if (Schedule_Descr[index].Description) {
+        strcpy(Schedule_Descr[index].Description, new_name);
+    }
+    pthread_mutex_unlock(&Schedule_Mutex);
+    return true;
 }
 
 /* 	BACnet Testing Observed Incident oi00106
@@ -230,6 +318,11 @@ int Schedule_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
         case PROP_OBJECT_NAME:
             Schedule_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Schedule_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
@@ -406,6 +499,7 @@ bool Schedule_Write_Property(BACNET_WRITE_PROPERTY_DATA *wp_data)
         case PROP_PRIORITY_FOR_WRITING:
         case PROP_STATUS_FLAGS:
         case PROP_RELIABILITY:
+        case PROP_DESCRIPTION:
             wp_data->error_class = ERROR_CLASS_PROPERTY;
             wp_data->error_code = ERROR_CODE_WRITE_ACCESS_DENIED;
             break;

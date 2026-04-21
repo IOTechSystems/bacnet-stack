@@ -78,6 +78,8 @@ BACnetRecipient ::= CHOICE {
         uint8_t Priority[MAX_BACNET_EVENT_TRANSITION];  /* BACnetARRAY[3] of Unsigned */
         uint8_t Ack_Required;   /* BACnetEventTransitionBits */
         BACNET_DESTINATION Recipient_List[NC_MAX_RECIPIENTS];   /* List of BACnetDestination */
+        char *Object_Name;
+        char *Description;
     } NOTIFICATION_CLASS_INFO;
 
 
@@ -135,6 +137,13 @@ BACnetRecipient ::= CHOICE {
     bool Notification_Class_Object_Name(
         uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Notification_Class_Name_Set(uint32_t object_instance, char *new_name);
+    BACNET_STACK_EXPORT
+    bool Notification_Class_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Notification_Class_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     int Notification_Class_Read_Property(

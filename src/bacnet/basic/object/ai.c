@@ -183,6 +183,7 @@ void Analog_Input_Free(void)
     for(unsigned int i=0; i < AI_Descr_Size; i++)
     {
         free(AI_Descr[i].Name);
+        free(AI_Descr[i].Description);
     }
 
     free(AI_Descr);
@@ -209,6 +210,7 @@ void Analog_Input_Objects_Init(void)
         AI_Descr[i].COV_Increment = 1.0f;
         AI_Descr[i].Changed = false;
         AI_Descr[i].Name = NULL;
+        AI_Descr[i].Description = NULL;
 #if defined(INTRINSIC_REPORTING)
         AI_Descr[i].Event_State = EVENT_STATE_NORMAL;
         /* notification class not connected */
@@ -394,6 +396,71 @@ bool Analog_Input_Name_Set(uint32_t object_instance, const char *new_name)
     return true;
 }
 
+bool Analog_Input_Object_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = ""; /* okay for single thread */
+    unsigned int index;
+    bool status = false;
+
+    index = Analog_Input_Instance_To_Index(object_instance);
+    if (index >= AI_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&AI_Descr_Mutex);
+    if (NULL != AI_Descr[index].Description)
+    {
+        snprintf(text_string, 32, "%s", AI_Descr[index].Description);   
+    }
+    else
+    {
+        sprintf(text_string, "ANALOG INPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&AI_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Analog_Input_Description_Set(uint32_t object_instance, const char *new_descr)
+{
+    if (NULL == AI_Descr) return false;
+
+    unsigned int index;
+    index = Analog_Input_Instance_To_Index(object_instance);
+    if (index >= AI_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&AI_Descr_Mutex);
+    free(AI_Descr[index].Description);
+    AI_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != AI_Descr[index].Description)
+    {
+        strcpy(AI_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&AI_Descr_Mutex);
+
+    return true;
+}
+
+bool Analog_Input_Units_Set(uint32_t object_instance, uint16_t value)
+{
+    unsigned index = 0;
+    bool status = false;
+
+    index = Analog_Input_Instance_To_Index(object_instance);
+    if (index < AI_Descr_Size) {
+        AI_Descr[index].Units = value;
+        status = true;
+    }
+
+    return status;
+}
+
 bool Analog_Input_Change_Of_Value(uint32_t object_instance)
 {
     unsigned index = 0;
@@ -577,8 +644,13 @@ int Analog_Input_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Analog_Input_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+
+        case PROP_DESCRIPTION:
+            Analog_Input_Object_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

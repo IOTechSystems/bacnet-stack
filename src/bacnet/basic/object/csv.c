@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/bacenum.h"
@@ -45,6 +46,7 @@
 /* Here is our Present Value */
 static CHARACTER_STRING_VALUE_DESCR *CSV_Descr = NULL;
 static size_t CSV_Descr_Size = 0;
+static pthread_mutex_t CSV_Descr_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -89,11 +91,34 @@ void CharacterString_Value_Resize(size_t new_size)
 
 void CharacterString_Value_Add(size_t count)
 {
-    CharacterString_Value_Resize(CSV_Descr_Size + count);
+    size_t prev_size = CSV_Descr_Size;
+    size_t new_size = CSV_Descr_Size + count;
+
+    pthread_mutex_lock(&CSV_Descr_Mutex);
+    CHARACTER_STRING_VALUE_DESCR *tmp = realloc(CSV_Descr, sizeof(*CSV_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&CSV_Descr_Mutex);
+        return;
+    }
+    CSV_Descr_Size = new_size;
+    CSV_Descr = tmp;
+    pthread_mutex_unlock(&CSV_Descr_Mutex);
+
+    CharacterString_Value_Objects_Init();
+
+    char name_buffer[64];
+    for (size_t i = prev_size; i < new_size; i++) {
+        snprintf(name_buffer, 64, "characterstring_value_%zu", i);
+        CharacterString_Value_Name_Set(i, name_buffer);
+    }
 }
 
 void CharacterString_Value_Free(void)
 {
+    for (unsigned i = 0; i < CSV_Descr_Size; i++) {
+        free(CSV_Descr[i].Object_Name);
+        free(CSV_Descr[i].Object_Description);
+    }
     free(CSV_Descr);
     CSV_Descr = NULL;
     CSV_Descr_Size = 0;
@@ -114,9 +139,8 @@ void CharacterString_Value_Objects_Init()
 
     /* initialize all Present Values */
     for (i = 0; i < CSV_Descr_Size; i++) {
-        snprintf(&CSV_Descr[i].Object_Name[0], sizeof(CSV_Descr[i].Object_Name),"CHARACTER STRING VALUE %u", i + 1);
-        snprintf(&CSV_Descr[i].Object_Description[0], sizeof(CSV_Descr[i].Object_Description),
-            "A Character String Value Example");
+        CSV_Descr[i].Object_Name = NULL;
+        CSV_Descr[i].Object_Description = NULL;
         characterstring_init_ansi(&CSV_Descr[i].Present_Value, "");
     }
 
@@ -302,6 +326,9 @@ static char *CharacterString_Value_Description(uint32_t object_instance)
     index = CharacterString_Value_Instance_To_Index(object_instance);
     if (index < CSV_Descr_Size) {
         pName = CSV_Descr[index].Object_Description;
+        if (pName == NULL) {
+            pName = "";
+        }
     }
 
     return pName;
@@ -320,23 +347,24 @@ bool CharacterString_Value_Description_Set(
     uint32_t object_instance, char *new_descr)
 {
     unsigned index = 0; /* offset from instance lookup */
-    size_t i = 0; /* loop counter */
     bool status = false; /* return value */
 
+    if (NULL == CSV_Descr) return false;
     index = CharacterString_Value_Instance_To_Index(object_instance);
     if (index < CSV_Descr_Size) {
-        status = true;
+        pthread_mutex_lock(&CSV_Descr_Mutex);
+        free(CSV_Descr[index].Object_Description);
         if (new_descr) {
-            for (i = 0; i < sizeof(CSV_Descr[index].Object_Description); i++) {
-                CSV_Descr[index].Object_Description[i] = new_descr[i];
-                if (new_descr[i] == 0) {
-                    break;
-                }
+            CSV_Descr[index].Object_Description =
+                calloc(strlen(new_descr) + 1, sizeof(char));
+            if (CSV_Descr[index].Object_Description) {
+                strcpy(CSV_Descr[index].Object_Description, new_descr);
             }
         } else {
-            memset(&CSV_Descr[index].Object_Description[0], 0,
-                sizeof(CSV_Descr[index].Object_Description));
+            CSV_Descr[index].Object_Description = NULL;
         }
+        pthread_mutex_unlock(&CSV_Descr_Mutex);
+        status = true;
     }
 
     return status;
@@ -356,10 +384,17 @@ bool CharacterString_Value_Object_Name(
 {
     unsigned index = 0; /* offset from instance lookup */
     bool status = false;
+    char name_buffer[64];
 
     index = CharacterString_Value_Instance_To_Index(object_instance);
     if (index < CSV_Descr_Size) {
-        status = characterstring_init_ansi(object_name, CSV_Descr[index].Object_Name);
+        if (CSV_Descr[index].Object_Name) {
+            status = characterstring_init_ansi(object_name, CSV_Descr[index].Object_Name);
+        } else {
+            snprintf(name_buffer, sizeof(name_buffer),
+                "characterstring_value_%u", index);
+            status = characterstring_init_ansi(object_name, name_buffer);
+        }
     }
 
     return status;
@@ -378,23 +413,24 @@ bool CharacterString_Value_Object_Name(
 bool CharacterString_Value_Name_Set(uint32_t object_instance, char *new_name)
 {
     unsigned index = 0; /* offset from instance lookup */
-    size_t i = 0; /* loop counter */
     bool status = false; /* return value */
 
+    if (NULL == CSV_Descr) return false;
     index = CharacterString_Value_Instance_To_Index(object_instance);
     if (index < CSV_Descr_Size) {
-        status = true;
-        /* FIXME: check to see if there is a matching name */
+        pthread_mutex_lock(&CSV_Descr_Mutex);
+        free(CSV_Descr[index].Object_Name);
         if (new_name) {
-            for (i = 0; i < sizeof(CSV_Descr[index].Object_Name); i++) {
-                CSV_Descr[index].Object_Name[i] = new_name[i];
-                if (new_name[i] == 0) {
-                    break;
-                }
+            CSV_Descr[index].Object_Name =
+                calloc(strlen(new_name) + 1, sizeof(char));
+            if (CSV_Descr[index].Object_Name) {
+                strcpy(CSV_Descr[index].Object_Name, new_name);
             }
         } else {
-            memset(&CSV_Descr[index].Object_Name[0], 0, sizeof(CSV_Descr[index].Object_Name));
+            CSV_Descr[index].Object_Name = NULL;
         }
+        pthread_mutex_unlock(&CSV_Descr_Mutex);
+        status = true;
     }
 
     return status;

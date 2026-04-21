@@ -70,6 +70,8 @@ extern "C" {
         uint8_t obj_prop_ref_cnt;       /* actual number of obj_prop references */
         uint8_t Priority_For_Writing;   /* (1..16) */
         bool Out_Of_Service;
+        char *Object_Name;
+        char *Description;
     } SCHEDULE_DESCR;
 
     BACNET_STACK_EXPORT
@@ -117,6 +119,13 @@ extern "C" {
     BACNET_STACK_EXPORT
     bool Schedule_Object_Name(uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Schedule_Name_Set(uint32_t object_instance, char *new_name);
+    BACNET_STACK_EXPORT
+    bool Schedule_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Schedule_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     int Schedule_Read_Property(BACNET_READ_PROPERTY_DATA * rpdata);

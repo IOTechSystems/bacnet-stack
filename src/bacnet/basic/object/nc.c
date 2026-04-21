@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #include "bacnet/basic/binding/address.h"
 #include "bacnet/bacdef.h"
@@ -51,6 +52,7 @@
 #if defined(INTRINSIC_REPORTING)
 static NOTIFICATION_CLASS_INFO *NC_Info = NULL;
 static size_t NC_Info_Size = 0;
+static pthread_mutex_t NC_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Notification_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -82,14 +84,34 @@ void Notification_Class_Resize(size_t new_size)
 
 void Notification_Class_Add(size_t count)
 {
-    Notification_Class_Resize(NC_Info_Size + count);
+    size_t new_size = NC_Info_Size + count;
+
+    pthread_mutex_lock(&NC_Mutex);
+    NOTIFICATION_CLASS_INFO *tmp = realloc(NC_Info, sizeof(*NC_Info) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&NC_Mutex);
+        return;
+    }
+    NC_Info = tmp;
+    NC_Info_Size = new_size;
+    pthread_mutex_unlock(&NC_Mutex);
+
+    Notification_Class_Objects_Init();
 }
 
 void Notification_Class_Free(void)
 {
+    if (NULL == NC_Info) return;
+
+    pthread_mutex_lock(&NC_Mutex);
+    for (unsigned i = 0; i < NC_Info_Size; i++) {
+        free(NC_Info[i].Object_Name);
+        free(NC_Info[i].Description);
+    }
     free(NC_Info);
     NC_Info = NULL;
     NC_Info_Size = 0;
+    pthread_mutex_unlock(&NC_Mutex);
 }
 
 void Notification_Class_Alloc(size_t size)
@@ -116,6 +138,8 @@ void Notification_Class_Objects_Init()
             255; /* The lowest priority for Normal message. */
         NC_Info[NotifyIdx].Priority[TRANSITION_TO_NORMAL] =
             255; /* The lowest priority for Normal message. */
+        NC_Info[NotifyIdx].Object_Name = NULL;
+        NC_Info[NotifyIdx].Description = NULL;
     }
 
     return;
@@ -177,15 +201,78 @@ bool Notification_Class_Object_Name(
 {
     static char text_string[32] = ""; /* okay for single thread */
     unsigned int index;
+
+    index = Notification_Class_Instance_To_Index(object_instance);
+    if (index >= NC_Info_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&NC_Mutex);
+    if (NULL != NC_Info[index].Object_Name) {
+        snprintf(text_string, 32, "%s", NC_Info[index].Object_Name);
+    } else {
+        sprintf(text_string, "NOTIFICATION CLASS %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&NC_Mutex);
+
+    return characterstring_init_ansi(object_name, text_string);
+}
+
+bool Notification_Class_Name_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == NC_Info) return false;
+    unsigned index = Notification_Class_Instance_To_Index(object_instance);
+    if (index >= NC_Info_Size) return false;
+
+    pthread_mutex_lock(&NC_Mutex);
+    free(NC_Info[index].Object_Name);
+    NC_Info[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (NC_Info[index].Object_Name) {
+        strcpy(NC_Info[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&NC_Mutex);
+    return true;
+}
+
+bool Notification_Class_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
     bool status = false;
 
     index = Notification_Class_Instance_To_Index(object_instance);
-    if (index < NC_Info_Size) {
-        sprintf(text_string, "NOTIFICATION CLASS %lu", (unsigned long)index);
-        status = characterstring_init_ansi(object_name, text_string);
+    if (index >= NC_Info_Size) {
+        return status;
     }
 
+    pthread_mutex_lock(&NC_Mutex);
+    if (NULL != NC_Info[index].Description) {
+        snprintf(text_string, 32, "%s", NC_Info[index].Description);
+    } else {
+        sprintf(text_string, "NOTIFICATION CLASS %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&NC_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
     return status;
+}
+
+bool Notification_Class_Description_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == NC_Info) return false;
+    unsigned index = Notification_Class_Instance_To_Index(object_instance);
+    if (index >= NC_Info_Size) return false;
+
+    pthread_mutex_lock(&NC_Mutex);
+    free(NC_Info[index].Description);
+    NC_Info[index].Description = calloc(strlen(new_name) + 1, sizeof(char));
+    if (NC_Info[index].Description) {
+        strcpy(NC_Info[index].Description, new_name);
+    }
+    pthread_mutex_unlock(&NC_Mutex);
+    return true;
 }
 
 int Notification_Class_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
@@ -215,9 +302,14 @@ int Notification_Class_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Notification_Class_Object_Name(
                 rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+
+        case PROP_DESCRIPTION:
+            Notification_Class_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

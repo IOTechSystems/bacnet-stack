@@ -134,6 +134,66 @@ void Analog_Value_Set_Properties(
     pthread_mutex_unlock(&AV_Descr_Mutex);
 }
 
+bool Analog_Value_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Analog_Value_Instance_To_Index(object_instance);
+    if (index >= AV_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&AV_Descr_Mutex);
+    if (NULL != AV_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", AV_Descr[index].Description);
+    } else {
+        sprintf(text_string, "ANALOG VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&AV_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Analog_Value_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == AV_Descr) return false;
+
+    unsigned int index;
+    index = Analog_Value_Instance_To_Index(object_instance);
+    if (index >= AV_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&AV_Descr_Mutex);
+    free(AV_Descr[index].Description);
+    AV_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != AV_Descr[index].Description)
+    {
+        strcpy(AV_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&AV_Descr_Mutex);
+
+    return true;
+}
+
+bool Analog_Value_Units_Set(uint32_t object_instance, uint16_t value)
+{
+    unsigned index = 0;
+    bool status = false;
+    index = Analog_Value_Instance_To_Index(object_instance);
+    if (index < AV_Descr_Size) {
+        AV_Descr[index].Units = value;
+        status = true;
+    }
+    return status;
+}
+
 void Analog_Value_Add(size_t count)
 {
     size_t prev_size = AV_Descr_Size;
@@ -188,6 +248,7 @@ void Analog_Value_Free(void)
     for(unsigned int i=0; i < AV_Descr_Size; i++)
     {
         free(AV_Descr[i].Name);
+        free(AV_Descr[i].Description);
     }
 
     free(AV_Descr);
@@ -213,6 +274,7 @@ void Analog_Value_Objects_Init(void)
         AV_Descr[i].COV_Increment = 0.0f;
         AV_Descr[i].Changed = false;
         AV_Descr[i].Name = NULL;
+        AV_Descr[i].Description = NULL;
 #if defined(INTRINSIC_REPORTING)
         AV_Descr[i].Event_State = EVENT_STATE_NORMAL;
         /* notification class not connected */
@@ -656,8 +718,15 @@ int Analog_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             if (Analog_Value_Object_Name(
+                    rpdata->object_instance, &char_string)) {
+                apdu_len =
+                    encode_application_character_string(&apdu[0], &char_string);
+            }
+            break;
+
+        case PROP_DESCRIPTION:
+            if (Analog_Value_Object_Description(
                     rpdata->object_instance, &char_string)) {
                 apdu_len =
                     encode_application_character_string(&apdu[0], &char_string);

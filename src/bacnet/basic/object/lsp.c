@@ -29,6 +29,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/bacenum.h"
@@ -43,6 +45,7 @@
 /* Here are our stored levels.*/
 static LIFE_SAFETY_POINT_DESCR *LSP_Descr = NULL;
 static size_t LSP_Descr_Size = 0;
+static pthread_mutex_t LSP_Descr_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Life_Safety_Point_Properties_Required[] = {
@@ -94,14 +97,34 @@ void Life_Safety_Point_Resize(size_t new_size)
 
 void Life_Safety_Point_Add(size_t count)
 {
-    Life_Safety_Point_Resize(LSP_Descr_Size + count);
+    size_t new_size = LSP_Descr_Size + count;
+
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    LIFE_SAFETY_POINT_DESCR *tmp = realloc(LSP_Descr, sizeof(*LSP_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&LSP_Descr_Mutex);
+        return;
+    }
+    LSP_Descr_Size = new_size;
+    LSP_Descr = tmp;
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
+
+    Life_Safety_Point_Objects_Init();
 }
 
 void Life_Safety_Point_Free(void)
 {
+    if (NULL == LSP_Descr) return;
+
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    for (unsigned i = 0; i < LSP_Descr_Size; i++) {
+        free(LSP_Descr[i].Object_Name);
+        free(LSP_Descr[i].Description);
+    }
     free(LSP_Descr);
     LSP_Descr = NULL;
     LSP_Descr_Size = 0;
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
 }
 
 void Life_Safety_Point_Alloc(size_t size)
@@ -115,19 +138,16 @@ void Life_Safety_Point_Alloc(size_t size)
 
 void Life_Safety_Point_Objects_Init()
 {
-    static bool initialized = false;
     unsigned i;
 
-    if (!initialized) {
-        initialized = true;
-
-        /* initialize all the analog output priority arrays to NULL */
-        for (i = 0; i < LSP_Descr_Size; i++) {
-            LSP_Descr[i].Mode = LIFE_SAFETY_MODE_DEFAULT;
-            LSP_Descr[i].State = LIFE_SAFETY_STATE_QUIET;
-            LSP_Descr[i].Silenced_State = SILENCED_STATE_UNSILENCED;
-            LSP_Descr[i].Operation = LIFE_SAFETY_OP_NONE;
-        }
+    /* initialize all the life safety point properties */
+    for (i = 0; i < LSP_Descr_Size; i++) {
+        LSP_Descr[i].Mode = LIFE_SAFETY_MODE_DEFAULT;
+        LSP_Descr[i].State = LIFE_SAFETY_STATE_QUIET;
+        LSP_Descr[i].Silenced_State = SILENCED_STATE_UNSILENCED;
+        LSP_Descr[i].Operation = LIFE_SAFETY_OP_NONE;
+        LSP_Descr[i].Object_Name = NULL;
+        LSP_Descr[i].Description = NULL;
     }
 
     return;
@@ -206,14 +226,80 @@ bool Life_Safety_Point_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
     static char text_string[32] = ""; /* okay for single thread */
+    unsigned index;
     bool status = false;
 
-    if (object_instance < LSP_Descr_Size) {
-        sprintf(text_string, "LS POINT %u", object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    index = Life_Safety_Point_Instance_To_Index(object_instance);
+    if (index >= LSP_Descr_Size) {
+        return status;
     }
 
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    if (NULL != LSP_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", LSP_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "LS POINT %u", object_instance);
+    }
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_name, text_string);
+
     return status;
+}
+
+bool Life_Safety_Point_Name_Set(uint32_t object_instance, char *new_name)
+{
+    unsigned index = Life_Safety_Point_Instance_To_Index(object_instance);
+    if (index >= LSP_Descr_Size) return false;
+
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    free(LSP_Descr[index].Object_Name);
+    LSP_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (LSP_Descr[index].Object_Name) {
+        strcpy(LSP_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
+    return true;
+}
+
+bool Life_Safety_Point_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Life_Safety_Point_Instance_To_Index(object_instance);
+    if (index >= LSP_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    if (NULL != LSP_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", LSP_Descr[index].Description);
+    } else {
+        sprintf(text_string, "LIFE SAFETY POINT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Life_Safety_Point_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    unsigned index = Life_Safety_Point_Instance_To_Index(object_instance);
+    if (index >= LSP_Descr_Size) return false;
+
+    pthread_mutex_lock(&LSP_Descr_Mutex);
+    free(LSP_Descr[index].Description);
+    LSP_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (LSP_Descr[index].Description) {
+        strcpy(LSP_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&LSP_Descr_Mutex);
+    return true;
 }
 
 /* return apdu len, or BACNET_STATUS_ERROR on error */
@@ -243,9 +329,13 @@ int Life_Safety_Point_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 &apdu[0], OBJECT_LIFE_SAFETY_POINT, rpdata->object_instance);
             break;
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Life_Safety_Point_Object_Name(
                 rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Life_Safety_Point_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

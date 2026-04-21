@@ -43,6 +43,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
@@ -337,6 +339,7 @@ int cl_decode_apdu(uint8_t *apdu,
 
 static COMMAND_DESCR *Command_Descr = NULL;
 static size_t Command_Descr_Size = 0;
+static pthread_mutex_t Command_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These arrays are used by the ReadPropertyMultiple handler */
 static const int Command_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -384,11 +387,27 @@ void Command_Resize(size_t new_size)
 
 void Command_Add(size_t count)
 {
-    Command_Resize(Command_Descr_Size + count);
+    size_t new_size = Command_Descr_Size + count;
+
+    pthread_mutex_lock(&Command_Mutex);
+    COMMAND_DESCR *tmp = realloc(Command_Descr, sizeof(*Command_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&Command_Mutex);
+        return;
+    }
+    Command_Descr = tmp;
+    Command_Descr_Size = new_size;
+    pthread_mutex_unlock(&Command_Mutex);
+
+    Command_Objects_Init();
 }
 
 void Command_Free(void)
 {
+    for (unsigned i = 0; i < Command_Descr_Size; i++) {
+        free(Command_Descr[i].Object_Name);
+        free(Command_Descr[i].Description);
+    }
     free(Command_Descr);
     Command_Descr = NULL;
     Command_Descr_Size = 0;
@@ -396,11 +415,13 @@ void Command_Free(void)
 
 void Command_Alloc(size_t size)
 {
-    Command_Descr = calloc(size, sizeof (*Command_Descr));
-    if (NULL != Command_Descr)
-    {
+    pthread_mutex_lock(&Command_Mutex);
+    COMMAND_DESCR *tmp = realloc(Command_Descr, sizeof(*Command_Descr) * size);
+    if (NULL != tmp) {
+        Command_Descr = tmp;
         Command_Descr_Size = size;
     }
+    pthread_mutex_unlock(&Command_Mutex);
 }
 
 void Command_Objects_Init()
@@ -410,6 +431,8 @@ void Command_Objects_Init()
         Command_Descr[i].Present_Value = 0;
         Command_Descr[i].In_Process = false;
         Command_Descr[i].All_Writes_Successful = true; /* Optimistic default */
+        Command_Descr[i].Object_Name = NULL;
+        Command_Descr[i].Description = NULL;
     }
 }
 
@@ -632,17 +655,106 @@ bool Command_All_Writes_Successful_Set(uint32_t object_instance, bool value)
 bool Command_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
-    static char text_string[32] = ""; /* okay for single thread */
+    char text_string[32] = "";
     unsigned int index;
     bool status = false;
 
     index = Command_Instance_To_Index(object_instance);
     if (index < Command_Descr_Size) {
-        sprintf(text_string, "COMMAND %lu", (unsigned long)index);
-        status = characterstring_init_ansi(object_name, text_string);
+        if (Command_Descr[index].Object_Name) {
+            status = characterstring_init_ansi(
+                object_name, Command_Descr[index].Object_Name);
+        } else {
+            sprintf(text_string, "COMMAND %lu", (unsigned long)index);
+            status = characterstring_init_ansi(object_name, text_string);
+        }
     }
 
     return status;
+}
+
+/**
+ * For a given object instance-number, sets the object name
+ *
+ * @param  object_instance - object-instance number of the object
+ * @param  new_name - new name string to set
+ *
+ * @return  true if set successfully
+ */
+bool Command_Name_Set(uint32_t object_instance, char *new_name)
+{
+    unsigned index = Command_Instance_To_Index(object_instance);
+    if (index >= Command_Descr_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Command_Mutex);
+    free(Command_Descr[index].Object_Name);
+    Command_Descr[index].Object_Name =
+        calloc(strlen(new_name) + 1, sizeof(char));
+    if (Command_Descr[index].Object_Name) {
+        strcpy(Command_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&Command_Mutex);
+    return true;
+}
+
+/**
+ * For a given object instance-number, returns the description string
+ *
+ * @param  object_instance - object-instance number of the object
+ *
+ * @return  pointer to Description string, or NULL if not set
+ */
+bool Command_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Command_Instance_To_Index(object_instance);
+    if (index >= Command_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&Command_Mutex);
+    if (NULL != Command_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", Command_Descr[index].Description);
+    } else {
+        sprintf(text_string, "COMMAND %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Command_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+/**
+ * For a given object instance-number, sets the description string
+ *
+ * @param  object_instance - object-instance number of the object
+ * @param  new_descr - new description string to set
+ *
+ * @return  true if set successfully
+ */
+bool Command_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    unsigned index = Command_Instance_To_Index(object_instance);
+    if (index >= Command_Descr_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Command_Mutex);
+    free(Command_Descr[index].Description);
+    Command_Descr[index].Description =
+        calloc(strlen(new_descr) + 1, sizeof(char));
+    if (Command_Descr[index].Description) {
+        strcpy(Command_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&Command_Mutex);
+    return true;
 }
 
 /**
@@ -685,8 +797,12 @@ int Command_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Command_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Command_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
