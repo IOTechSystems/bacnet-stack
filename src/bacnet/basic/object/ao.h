@@ -41,6 +41,8 @@ extern "C" {
         float Level[BACNET_MAX_PRIORITY];
         bool Out_Of_Service;
         char *Name;
+        char *Description;
+        uint16_t Units;
     } ANALOG_OUTPUT_DESCR;
 
     BACNET_STACK_EXPORT
@@ -124,8 +126,9 @@ extern "C" {
         const char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Analog_Output_Description(
-        uint32_t instance);
+    bool Analog_Output_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Analog_Output_Description_Set(
         uint32_t instance,

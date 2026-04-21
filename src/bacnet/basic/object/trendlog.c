@@ -27,6 +27,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h> /* for memmove */
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/bacenum.h"
@@ -47,6 +48,7 @@
 
 static TREND_LOG_DESCR *TL_Descr = NULL;
 static size_t TL_Descr_Size = 0;
+static pthread_mutex_t TL_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Trend_Log_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -144,14 +146,34 @@ void Trend_Log_Resize(size_t new_size)
 
 void Trend_Log_Add(size_t count)
 {
-    Trend_Log_Resize(TL_Descr_Size + count);
+    size_t new_size = TL_Descr_Size + count;
+
+    pthread_mutex_lock(&TL_Mutex);
+    TREND_LOG_DESCR *tmp = realloc(TL_Descr, sizeof(*TL_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&TL_Mutex);
+        return;
+    }
+    TL_Descr = tmp;
+    TL_Descr_Size = new_size;
+    pthread_mutex_unlock(&TL_Mutex);
+
+    Trend_Log_Objects_Init();
 }
 
 void Trend_Log_Free(void)
 {
+    if (NULL == TL_Descr) return;
+
+    pthread_mutex_lock(&TL_Mutex);
+    for (unsigned i = 0; i < TL_Descr_Size; i++) {
+        free(TL_Descr[i].Object_Name);
+        free(TL_Descr[i].Description);
+    }
     free(TL_Descr);
     TL_Descr = NULL;
     TL_Descr_Size = 0;
+    pthread_mutex_unlock(&TL_Mutex);
 }
 
 void Trend_Log_Alloc(size_t size)
@@ -165,87 +187,85 @@ void Trend_Log_Alloc(size_t size)
 
 void Trend_Log_Objects_Init()
 {
-    static bool initialized = false;
     int iLog;
     int iEntry;
     struct tm TempTime;
     time_t tClock;
 
-    if (!initialized) {
-        initialized = true;
+    /* initialize all the values */
 
-        /* initialize all the values */
+    for (iLog = 0; iLog < TL_Descr_Size; iLog++) {
+        /*
+         * Do we need to do anything here?
+         * Trend logs are usually assumed to survive over resets
+         * and are frequently implemented using Battery Backed RAM
+         * If they are implemented using Flash or SD cards or some
+         * such mechanism there may be some RAM based setup needed
+         * for log management purposes.
+         * We probably need to look at inserting LOG_INTERRUPTED
+         * entries into any active logs if the power down or reset
+         * may have caused us to miss readings.
+         */
 
-        for (iLog = 0; iLog < TL_Descr_Size; iLog++) {
-            /*
-             * Do we need to do anything here?
-             * Trend logs are usually assumed to survive over resets
-             * and are frequently implemented using Battery Backed RAM
-             * If they are implemented using Flash or SD cards or some
-             * such mechanism there may be some RAM based setup needed
-             * for log management purposes.
-             * We probably need to look at inserting LOG_INTERRUPTED
-             * entries into any active logs if the power down or reset
-             * may have caused us to miss readings.
-             */
+        /* We will just fill the logs with some entries for testing
+         * purposes.
+         */
+        TempTime.tm_year = 109;
+        TempTime.tm_mon = iLog + 1; /* Different month for each log */
+        TempTime.tm_mday = 1;
+        TempTime.tm_hour = 0;
+        TempTime.tm_min = 0;
+        TempTime.tm_sec = 0;
+        TempTime.tm_isdst = -1; // Let mktime() determine whether or not DST is in effect
+        tClock = mktime(&TempTime);
 
-            /* We will just fill the logs with some entries for testing
-             * purposes.
-             */
-            TempTime.tm_year = 109;
-            TempTime.tm_mon = iLog + 1; /* Different month for each log */
-            TempTime.tm_mday = 1;
-            TempTime.tm_hour = 0;
-            TempTime.tm_min = 0;
-            TempTime.tm_sec = 0;
-            TempTime.tm_isdst = -1; // Let mktime() determine whether or not DST is in effect
-            tClock = mktime(&TempTime);
-
-            for (iEntry = 0; iEntry < TL_MAX_ENTRIES; iEntry++) {
-                TL_Descr[iLog].Logs[iEntry].tTimeStamp = tClock;
-                TL_Descr[iLog].Logs[iEntry].ucRecType = TL_TYPE_REAL;
-                TL_Descr[iLog].Logs[iEntry].Datum.fReal =
-                    (float)(iEntry + (iLog * TL_MAX_ENTRIES));
-                /* Put status flags with every second log */
-                if ((iLog & 1) == 0) {
-                    TL_Descr[iLog].Logs[iEntry].ucStatus = 128;
-                } else {
-                    TL_Descr[iLog].Logs[iEntry].ucStatus = 0;
-                }
-                tClock += 900; /* advance 15 minutes */
+        for (iEntry = 0; iEntry < TL_MAX_ENTRIES; iEntry++) {
+            TL_Descr[iLog].Logs[iEntry].tTimeStamp = tClock;
+            TL_Descr[iLog].Logs[iEntry].ucRecType = TL_TYPE_REAL;
+            TL_Descr[iLog].Logs[iEntry].Datum.fReal =
+                (float)(iEntry + (iLog * TL_MAX_ENTRIES));
+            /* Put status flags with every second log */
+            if ((iLog & 1) == 0) {
+                TL_Descr[iLog].Logs[iEntry].ucStatus = 128;
+            } else {
+                TL_Descr[iLog].Logs[iEntry].ucStatus = 0;
             }
-
-            TL_Descr[iLog].Log_Info.tLastDataTime = tClock - 900;
-            TL_Descr[iLog].Log_Info.bAlignIntervals = true;
-            TL_Descr[iLog].Log_Info.bEnable = true;
-            TL_Descr[iLog].Log_Info.bStopWhenFull = false;
-            TL_Descr[iLog].Log_Info.bTrigger = false;
-            TL_Descr[iLog].Log_Info.LoggingType = LOGGING_TYPE_POLLED;
-            TL_Descr[iLog].Log_Info.Source.arrayIndex = 0;
-            TL_Descr[iLog].Log_Info.ucTimeFlags = 0;
-            TL_Descr[iLog].Log_Info.ulIntervalOffset = 0;
-            TL_Descr[iLog].Log_Info.iIndex = 0;
-            TL_Descr[iLog].Log_Info.ulLogInterval = 900;
-            TL_Descr[iLog].Log_Info.ulRecordCount = TL_MAX_ENTRIES;
-            TL_Descr[iLog].Log_Info.ulTotalRecordCount = 10000;
-
-            TL_Descr[iLog].Log_Info.Source.deviceIdentifier.instance =
-                Device_Object_Instance_Number();
-            TL_Descr[iLog].Log_Info.Source.deviceIdentifier.type = OBJECT_DEVICE;
-            TL_Descr[iLog].Log_Info.Source.objectIdentifier.instance = iLog;
-            TL_Descr[iLog].Log_Info.Source.objectIdentifier.type = OBJECT_ANALOG_INPUT;
-            TL_Descr[iLog].Log_Info.Source.arrayIndex = BACNET_ARRAY_ALL;
-            TL_Descr[iLog].Log_Info.Source.propertyIdentifier = PROP_PRESENT_VALUE;
-
-            datetime_set_values(
-                &TL_Descr[iLog].Log_Info.StartTime, 2009, 1, 1, 0, 0, 0, 0);
-            TL_Descr[iLog].Log_Info.tStartTime =
-                TL_BAC_Time_To_Local(&TL_Descr[iLog].Log_Info.StartTime);
-            datetime_set_values(
-                &TL_Descr[iLog].Log_Info.StopTime, 2020, 12, 22, 23, 59, 59, 99);
-            TL_Descr[iLog].Log_Info.tStopTime =
-                TL_BAC_Time_To_Local(&TL_Descr[iLog].Log_Info.StopTime);
+            tClock += 900; /* advance 15 minutes */
         }
+
+        TL_Descr[iLog].Log_Info.tLastDataTime = tClock - 900;
+        TL_Descr[iLog].Log_Info.bAlignIntervals = true;
+        TL_Descr[iLog].Log_Info.bEnable = true;
+        TL_Descr[iLog].Log_Info.bStopWhenFull = false;
+        TL_Descr[iLog].Log_Info.bTrigger = false;
+        TL_Descr[iLog].Log_Info.LoggingType = LOGGING_TYPE_POLLED;
+        TL_Descr[iLog].Log_Info.Source.arrayIndex = 0;
+        TL_Descr[iLog].Log_Info.ucTimeFlags = 0;
+        TL_Descr[iLog].Log_Info.ulIntervalOffset = 0;
+        TL_Descr[iLog].Log_Info.iIndex = 0;
+        TL_Descr[iLog].Log_Info.ulLogInterval = 900;
+        TL_Descr[iLog].Log_Info.ulRecordCount = TL_MAX_ENTRIES;
+        TL_Descr[iLog].Log_Info.ulTotalRecordCount = 10000;
+
+        TL_Descr[iLog].Log_Info.Source.deviceIdentifier.instance =
+            Device_Object_Instance_Number();
+        TL_Descr[iLog].Log_Info.Source.deviceIdentifier.type = OBJECT_DEVICE;
+        TL_Descr[iLog].Log_Info.Source.objectIdentifier.instance = iLog;
+        TL_Descr[iLog].Log_Info.Source.objectIdentifier.type = OBJECT_ANALOG_INPUT;
+        TL_Descr[iLog].Log_Info.Source.arrayIndex = BACNET_ARRAY_ALL;
+        TL_Descr[iLog].Log_Info.Source.propertyIdentifier = PROP_PRESENT_VALUE;
+
+        datetime_set_values(
+            &TL_Descr[iLog].Log_Info.StartTime, 2009, 1, 1, 0, 0, 0, 0);
+        TL_Descr[iLog].Log_Info.tStartTime =
+            TL_BAC_Time_To_Local(&TL_Descr[iLog].Log_Info.StartTime);
+        datetime_set_values(
+            &TL_Descr[iLog].Log_Info.StopTime, 2020, 12, 22, 23, 59, 59, 99);
+        TL_Descr[iLog].Log_Info.tStopTime =
+            TL_BAC_Time_To_Local(&TL_Descr[iLog].Log_Info.StopTime);
+
+        TL_Descr[iLog].Object_Name = NULL;
+        TL_Descr[iLog].Description = NULL;
     }
 }
 
@@ -274,14 +294,79 @@ bool Trend_Log_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
     static char text_string[32] = ""; /* okay for single thread */
-    bool status = false;
+    unsigned index;
 
-    if (object_instance < TL_Descr_Size) {
-        sprintf(text_string, "Trend Log %u", object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    index = Trend_Log_Instance_To_Index(object_instance);
+    if (index >= TL_Descr_Size) {
+        return false;
     }
 
+    pthread_mutex_lock(&TL_Mutex);
+    if (NULL != TL_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", TL_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "Trend Log %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&TL_Mutex);
+
+    return characterstring_init_ansi(object_name, text_string);
+}
+
+bool Trend_Log_Name_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == TL_Descr) return false;
+    unsigned index = Trend_Log_Instance_To_Index(object_instance);
+    if (index >= TL_Descr_Size) return false;
+
+    pthread_mutex_lock(&TL_Mutex);
+    free(TL_Descr[index].Object_Name);
+    TL_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (TL_Descr[index].Object_Name) {
+        strcpy(TL_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&TL_Mutex);
+    return true;
+}
+
+bool Trend_Log_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Trend_Log_Instance_To_Index(object_instance);
+    if (index >= TL_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&TL_Mutex);
+    if (NULL != TL_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", TL_Descr[index].Description);
+    } else {
+        sprintf(text_string, "TREND LOG %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&TL_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
     return status;
+}
+
+bool Trend_Log_Description_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == TL_Descr) return false;
+    unsigned index = Trend_Log_Instance_To_Index(object_instance);
+    if (index >= TL_Descr_Size) return false;
+
+    pthread_mutex_lock(&TL_Mutex);
+    free(TL_Descr[index].Description);
+    TL_Descr[index].Description = calloc(strlen(new_name) + 1, sizeof(char));
+    if (TL_Descr[index].Description) {
+        strcpy(TL_Descr[index].Description, new_name);
+    }
+    pthread_mutex_unlock(&TL_Mutex);
+    return true;
 }
 
 /* return the length of the apdu encoded or BACNET_STATUS_ERROR for error or
@@ -307,9 +392,14 @@ int Trend_Log_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 &apdu[0], OBJECT_TRENDLOG, rpdata->object_instance);
             break;
 
-        case PROP_DESCRIPTION:
         case PROP_OBJECT_NAME:
             Trend_Log_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+
+        case PROP_DESCRIPTION:
+            Trend_Log_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

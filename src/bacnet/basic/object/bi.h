@@ -44,6 +44,7 @@ extern "C" {
         bool Change_Of_Value;
         BACNET_POLARITY Polarity;
         char * Name;
+        char * Description;
     } BINARY_INPUT_DESCR;
 
     BACNET_STACK_EXPORT
@@ -93,8 +94,9 @@ extern "C" {
         BACNET_BINARY_PV value);
 
     BACNET_STACK_EXPORT
-    char *Binary_Input_Description(
-        uint32_t instance);
+    bool Binary_Input_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Binary_Input_Description_Set(
         uint32_t instance,

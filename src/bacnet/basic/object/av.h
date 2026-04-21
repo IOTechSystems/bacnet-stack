@@ -53,6 +53,7 @@ extern "C" {
         float COV_Increment;
         bool Changed;
         char *Name;
+        char *Description;
 #if defined(INTRINSIC_REPORTING)
         uint32_t Time_Delay;
         uint32_t Notification_Class;
@@ -154,8 +155,9 @@ extern "C" {
         float value);
 
     BACNET_STACK_EXPORT
-    char *Analog_Value_Description(
-        uint32_t instance);
+    bool Analog_Value_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Analog_Value_Description_Set(
         uint32_t instance,

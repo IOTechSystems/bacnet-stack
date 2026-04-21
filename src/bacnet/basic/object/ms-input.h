@@ -45,8 +45,8 @@ extern "C" {
     typedef struct Multistate_Input_Descr {
         uint8_t Present_Value;
         bool Out_Of_Service;
-        char Object_Name[64];
-        char Object_Description[64];
+        char *Object_Name;
+        char *Object_Description;
         char State_Text[MULTISTATE_NUMBER_OF_STATES][64];
     } MULTISTATE_INPUT_DESCR;
 

@@ -44,6 +44,8 @@ extern "C" {
         BACNET_SILENCED_STATE Silenced_State;
         BACNET_LIFE_SAFETY_OPERATION Operation;
         bool Out_Of_Service;
+        char *Object_Name;
+        char *Description;
     }LIFE_SAFETY_POINT_DESCR;
 
     BACNET_STACK_EXPORT
@@ -67,6 +69,13 @@ extern "C" {
     bool Life_Safety_Point_Object_Name(
         uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Life_Safety_Point_Name_Set(uint32_t object_instance, char *new_name);
+    BACNET_STACK_EXPORT
+    bool Life_Safety_Point_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Life_Safety_Point_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     void Life_Safety_Point_Resize(size_t new_size);

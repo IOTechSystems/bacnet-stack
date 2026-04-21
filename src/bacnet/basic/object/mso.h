@@ -40,6 +40,8 @@ extern "C" {
     typedef struct multistate_output_descr{
         uint8_t Level[BACNET_MAX_PRIORITY];
         bool Out_Of_Service;
+        char *Object_Name;
+        char *Description;
     } MULTISTATE_OUTPUT_DESCR;
 
     BACNET_STACK_EXPORT
@@ -64,6 +66,8 @@ extern "C" {
     bool Multistate_Output_Object_Name(
         uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Multistate_Output_Name_Set(uint32_t object_instance, char *new_name);
 
     BACNET_STACK_EXPORT
     void Multistate_Output_Resize(size_t new_size);
@@ -124,8 +128,9 @@ extern "C" {
         bool value);
 
     BACNET_STACK_EXPORT
-    char *Multistate_Output_Description(
-        uint32_t instance);
+    bool Multistate_Output_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Multistate_Output_Description_Set(
         uint32_t object_instance,

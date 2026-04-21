@@ -36,6 +36,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "bacnet/config.h"
 #include "bacnet/basic/binding/address.h"
 #include "bacnet/bacdef.h"
@@ -92,6 +93,7 @@ struct mstp_port {
 struct object_data {
     uint32_t Instance_Number;
     char *Object_Name;
+    char *Description;
     BACNET_RELIABILITY Reliability;
     bool Out_Of_Service : 1;
     bool Changes_Pending : 1;
@@ -110,6 +112,7 @@ struct object_data {
 
 static struct object_data *Object_List = NULL;
 static size_t Object_List_Size = 0;
+static pthread_mutex_t Network_Port_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Network_Port_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -249,12 +252,83 @@ bool Network_Port_Name_Set(uint32_t object_instance, char *new_name)
     unsigned index = 0; /* offset from instance lookup */
     bool status = false;
 
+    if (NULL == Object_List) return false;
+
     index = Network_Port_Instance_To_Index(object_instance);
     if (index < Object_List_Size) {
-        Object_List[index].Object_Name = new_name;
+        pthread_mutex_lock(&Network_Port_Mutex);
+        free(Object_List[index].Object_Name);
+        Object_List[index].Object_Name =
+            calloc(strlen(new_name) + 1, sizeof(char));
+        if (Object_List[index].Object_Name) {
+            strcpy(Object_List[index].Object_Name, new_name);
+        }
+        pthread_mutex_unlock(&Network_Port_Mutex);
+        status = true;
     }
 
     return status;
+}
+
+/**
+ * For a given object instance-number, returns the description
+ *
+ * @param  object_instance - object-instance number of the object
+ *
+ * @return  description string, or NULL if not set
+ */
+bool Network_Port_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Network_Port_Instance_To_Index(object_instance);
+    if (index >= Object_List_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&Network_Port_Mutex);
+    if (NULL != Object_List[index].Description) {
+        snprintf(text_string, 32, "%s", Object_List[index].Description);
+    } else {
+        sprintf(text_string, "NETWORK PORT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Network_Port_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+/**
+ * For a given object instance-number, sets the description
+ *
+ * @param  object_instance - object-instance number of the object
+ * @param  new_descr - holds the description to be set
+ *
+ * @return  true if description was set
+ */
+bool Network_Port_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == Object_List) return false;
+
+    unsigned index = Network_Port_Instance_To_Index(object_instance);
+    if (index >= Object_List_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Network_Port_Mutex);
+    free(Object_List[index].Description);
+    Object_List[index].Description =
+        calloc(strlen(new_descr) + 1, sizeof(char));
+    if (Object_List[index].Description) {
+        strcpy(Object_List[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&Network_Port_Mutex);
+
+    return true;
 }
 
 /**
@@ -1876,6 +1950,11 @@ int Network_Port_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
+        case PROP_DESCRIPTION:
+            Network_Port_Description(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
         case PROP_OBJECT_TYPE:
             apdu_len =
                 encode_application_enumerated(&apdu[0], OBJECT_NETWORK_PORT);
@@ -2315,9 +2394,20 @@ void Network_Port_Add(size_t count)
 
 void Network_Port_Free(void)
 {
+    if (NULL == Object_List) return;
+
+    pthread_mutex_lock(&Network_Port_Mutex);
+
+    for (size_t i = 0; i < Object_List_Size; i++) {
+        free(Object_List[i].Object_Name);
+        free(Object_List[i].Description);
+    }
+
     free(Object_List);
     Object_List = NULL;
     Object_List_Size = 0;
+
+    pthread_mutex_unlock(&Network_Port_Mutex);
 }
 
 void Network_Port_Alloc(size_t size)
@@ -2331,9 +2421,11 @@ void Network_Port_Alloc(size_t size)
 
 void Network_Port_Objects_Init()
 {
-  for (int i = 0; i < Object_List_Size; i++)
+  for (size_t i = 0; i < Object_List_Size; i++)
   {
-    Object_List[i].Instance_Number = i;
+    Object_List[i].Instance_Number = (uint32_t)i;
+    Object_List[i].Object_Name = NULL;
+    Object_List[i].Description = NULL;
   }
 }
 

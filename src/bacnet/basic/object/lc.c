@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h> /* for memcpy */
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/datetime.h"
@@ -46,6 +47,7 @@
 /*  indicates the current load shedding state of the object */
 static LOAD_CONTROL_DESCR *Load_Control_Descr = NULL;
 static size_t Load_Control_Descr_Size = 0;
+static pthread_mutex_t LC_Descr_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static BACNET_DATE_TIME Current_Time;
 
@@ -95,14 +97,34 @@ void Load_Control_Resize(size_t new_size)
 
 void Load_Control_Add(size_t count)
 {
-    Load_Control_Resize(Load_Control_Descr_Size + count);
+    size_t new_size = Load_Control_Descr_Size + count;
+
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    LOAD_CONTROL_DESCR *tmp = realloc(Load_Control_Descr, sizeof(*Load_Control_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&LC_Descr_Mutex);
+        return;
+    }
+    Load_Control_Descr_Size = new_size;
+    Load_Control_Descr = tmp;
+    pthread_mutex_unlock(&LC_Descr_Mutex);
+
+    Load_Control_Objects_Init();
 }
 
 void Load_Control_Free(void)
 {
+    if (NULL == Load_Control_Descr) return;
+
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    for (unsigned i = 0; i < Load_Control_Descr_Size; i++) {
+        free(Load_Control_Descr[i].Object_Name);
+        free(Load_Control_Descr[i].Description);
+    }
     free(Load_Control_Descr);
     Load_Control_Descr = NULL;
     Load_Control_Descr_Size = 0;
+    pthread_mutex_unlock(&LC_Descr_Mutex);
 }
 
 void Load_Control_Alloc(size_t size)
@@ -139,6 +161,8 @@ void Load_Control_Objects_Init()
         for (j = 0; j < MAX_SHED_LEVELS; j++) {
             Load_Control_Descr[i].Shed_Levels[j] = j + 1;
         }
+        Load_Control_Descr[i].Object_Name = NULL;
+        Load_Control_Descr[i].Description = NULL;
     }
 
     return;
@@ -213,14 +237,80 @@ bool Load_Control_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
     static char text_string[32] = ""; /* okay for single thread */
+    unsigned index;
     bool status = false;
 
-    if (object_instance < Load_Control_Descr_Size) {
-        sprintf(text_string, "LOAD CONTROL %u", object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    index = Load_Control_Instance_To_Index(object_instance);
+    if (index >= Load_Control_Descr_Size) {
+        return status;
     }
 
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    if (NULL != Load_Control_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", Load_Control_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "LOAD CONTROL %u", object_instance);
+    }
+    pthread_mutex_unlock(&LC_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_name, text_string);
+
     return status;
+}
+
+bool Load_Control_Name_Set(uint32_t object_instance, char *new_name)
+{
+    unsigned index = Load_Control_Instance_To_Index(object_instance);
+    if (index >= Load_Control_Descr_Size) return false;
+
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    free(Load_Control_Descr[index].Object_Name);
+    Load_Control_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (Load_Control_Descr[index].Object_Name) {
+        strcpy(Load_Control_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&LC_Descr_Mutex);
+    return true;
+}
+
+bool Load_Control_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Load_Control_Instance_To_Index(object_instance);
+    if (index >= Load_Control_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    if (NULL != Load_Control_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", Load_Control_Descr[index].Description);
+    } else {
+        sprintf(text_string, "LOAD CONTROL %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&LC_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Load_Control_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    unsigned index = Load_Control_Instance_To_Index(object_instance);
+    if (index >= Load_Control_Descr_Size) return false;
+
+    pthread_mutex_lock(&LC_Descr_Mutex);
+    free(Load_Control_Descr[index].Description);
+    Load_Control_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (Load_Control_Descr[index].Description) {
+        strcpy(Load_Control_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&LC_Descr_Mutex);
+    return true;
 }
 
 static void Update_Current_Time(BACNET_DATE_TIME *bdatetime)
@@ -601,8 +691,12 @@ int Load_Control_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 &apdu[0], OBJECT_LOAD_CONTROL, rpdata->object_instance);
             break;
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Load_Control_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Load_Control_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
@@ -43,6 +44,7 @@
 
 static OCTETSTRING_VALUE_DESCR *OSV_Descr = NULL;
 static size_t OSV_Descr_Size = 0;
+static pthread_mutex_t OSV_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int OctetString_Value_Properties_Required[] = {
@@ -82,14 +84,34 @@ void OctetString_Value_Resize(size_t new_size)
 
 void OctetString_Value_Add(size_t count)
 {
-    OctetString_Value_Resize(OSV_Descr_Size + count);
+    size_t new_size = OSV_Descr_Size + count;
+
+    pthread_mutex_lock(&OSV_Mutex);
+    OCTETSTRING_VALUE_DESCR *tmp = realloc(OSV_Descr, sizeof(*OSV_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&OSV_Mutex);
+        return;
+    }
+    OSV_Descr = tmp;
+    OSV_Descr_Size = new_size;
+    pthread_mutex_unlock(&OSV_Mutex);
+
+    OctetString_Value_Objects_Init();
 }
 
 void OctetString_Value_Free(void)
 {
+    if (NULL == OSV_Descr) return;
+
+    pthread_mutex_lock(&OSV_Mutex);
+    for (unsigned i = 0; i < OSV_Descr_Size; i++) {
+        free(OSV_Descr[i].Object_Name);
+        free(OSV_Descr[i].Description);
+    }
     free(OSV_Descr);
     OSV_Descr = NULL;
     OSV_Descr_Size = 0;
+    pthread_mutex_unlock(&OSV_Mutex);
 }
 
 void OctetString_Value_Alloc(size_t size)
@@ -108,6 +130,8 @@ void OctetString_Value_Objects_Init()
     for (i = 0; i < OSV_Descr_Size; i++) {
         memset(&OSV_Descr[i], 0x00, sizeof(OCTETSTRING_VALUE_DESCR));
         octetstring_init(&OSV_Descr[i].Present_Value, NULL, 0);
+        OSV_Descr[i].Object_Name = NULL;
+        OSV_Descr[i].Description = NULL;
     }
 }
 
@@ -206,15 +230,79 @@ bool OctetString_Value_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
     static char text_string[32] = ""; /* okay for single thread */
-    bool status = false;
+    unsigned index;
 
-    if (object_instance < OSV_Descr_Size) {
-        sprintf(text_string, "OCTETSTRING VALUE %lu",
-            (unsigned long)object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    index = OctetString_Value_Instance_To_Index(object_instance);
+    if (index >= OSV_Descr_Size) {
+        return false;
     }
 
+    pthread_mutex_lock(&OSV_Mutex);
+    if (NULL != OSV_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", OSV_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "OCTETSTRING VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&OSV_Mutex);
+
+    return characterstring_init_ansi(object_name, text_string);
+}
+
+bool OctetString_Value_Name_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == OSV_Descr) return false;
+    unsigned index = OctetString_Value_Instance_To_Index(object_instance);
+    if (index >= OSV_Descr_Size) return false;
+
+    pthread_mutex_lock(&OSV_Mutex);
+    free(OSV_Descr[index].Object_Name);
+    OSV_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (OSV_Descr[index].Object_Name) {
+        strcpy(OSV_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&OSV_Mutex);
+    return true;
+}
+
+bool OctetString_Value_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = OctetString_Value_Instance_To_Index(object_instance);
+    if (index >= OSV_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&OSV_Mutex);
+    if (NULL != OSV_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", OSV_Descr[index].Description);
+    } else {
+        sprintf(text_string, "OCTET STRING VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&OSV_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
     return status;
+}
+
+bool OctetString_Value_Description_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == OSV_Descr) return false;
+    unsigned index = OctetString_Value_Instance_To_Index(object_instance);
+    if (index >= OSV_Descr_Size) return false;
+
+    pthread_mutex_lock(&OSV_Mutex);
+    free(OSV_Descr[index].Description);
+    OSV_Descr[index].Description = calloc(strlen(new_name) + 1, sizeof(char));
+    if (OSV_Descr[index].Description) {
+        strcpy(OSV_Descr[index].Description, new_name);
+    }
+    pthread_mutex_unlock(&OSV_Mutex);
+    return true;
 }
 
 /* return apdu len, or BACNET_STATUS_ERROR on error */
@@ -250,9 +338,14 @@ int OctetString_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             OctetString_Value_Object_Name(
                 rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+
+        case PROP_DESCRIPTION:
+            OctetString_Value_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

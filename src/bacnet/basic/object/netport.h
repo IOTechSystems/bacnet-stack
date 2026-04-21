@@ -69,8 +69,9 @@ extern "C" {
         char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Network_Port_Description(
-        uint32_t instance);
+    bool Network_Port_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Network_Port_Description_Set(
         uint32_t instance,

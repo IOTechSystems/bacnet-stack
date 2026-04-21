@@ -108,6 +108,54 @@ void Binary_Value_Set_Properties(
 }
 
 
+bool Binary_Value_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Binary_Value_Instance_To_Index(object_instance);
+    if (index >= BV_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&BV_Descr_Mutex);
+    if (NULL != BV_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", BV_Descr[index].Description);
+    } else {
+        sprintf(text_string, "BINARY VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&BV_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Binary_Value_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == BV_Descr) return false;
+
+    unsigned int index;
+    index = Binary_Value_Instance_To_Index(object_instance);
+    if (index >= BV_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&BV_Descr_Mutex);
+    free(BV_Descr[index].Description);
+    BV_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != BV_Descr[index].Description)
+    {
+        strcpy(BV_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&BV_Descr_Mutex);
+
+    return true;
+}
+
 void Binary_Value_Add(size_t count)
 {
     size_t prev_size = BV_Descr_Size;
@@ -145,6 +193,7 @@ void Binary_Value_Free(void)
     for(unsigned int i=0; i < BV_Descr_Size; i++)
     {
         free(BV_Descr[i].Name);
+        free(BV_Descr[i].Description);
     }
 
     free(BV_Descr);
@@ -157,21 +206,17 @@ void Binary_Value_Free(void)
 void Binary_Value_Objects_Init(void)
 {
     unsigned i, j;
-    static bool initialized = false;
 
-    if (!initialized) {
-        initialized = true;
-
-        /* initialize all the analog output priority arrays to NULL */
-        pthread_mutex_lock(&BV_Descr_Mutex);
-        for (i = 0; i < BV_Descr_Size; i++) {
-            for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
-                BV_Descr[i].Level[j] = BINARY_NULL;
-            }
-            BV_Descr[i].Name = NULL;
+    /* initialize all the analog output priority arrays to NULL */
+    pthread_mutex_lock(&BV_Descr_Mutex);
+    for (i = 0; i < BV_Descr_Size; i++) {
+        for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
+            BV_Descr[i].Level[j] = BINARY_NULL;
         }
-        pthread_mutex_unlock(&BV_Descr_Mutex);
+        BV_Descr[i].Name = NULL;
+        BV_Descr[i].Description = NULL;
     }
+    pthread_mutex_unlock(&BV_Descr_Mutex);
 
 }
 
@@ -446,8 +491,14 @@ int Binary_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             /* note: Name and Description don't have to be the same.
                You could make Description writable and different */
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             if (Binary_Value_Object_Name(
+                    rpdata->object_instance, &char_string)) {
+                apdu_len =
+                    encode_application_character_string(&apdu[0], &char_string);
+            }
+            break;
+        case PROP_DESCRIPTION:
+            if (Binary_Value_Description(
                     rpdata->object_instance, &char_string)) {
                 apdu_len =
                     encode_application_character_string(&apdu[0], &char_string);

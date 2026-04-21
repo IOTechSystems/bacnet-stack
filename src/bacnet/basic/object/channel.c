@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/bacenum.h"
@@ -68,10 +69,13 @@ struct bacnet_channel_object {
     BACNET_DEVICE_OBJECT_PROPERTY_REFERENCE Members[CHANNEL_MEMBERS_MAX];
     uint16_t Number;
     uint32_t Control_Groups[CONTROL_GROUPS_MAX];
+    char *Object_Name;
+    char *Description;
 };
 
 static struct bacnet_channel_object *Channel_Descr = NULL;
 static size_t Channel_Descr_Size = 0;
+static pthread_mutex_t Channel_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These arrays are used by the ReadPropertyMultiple handler
    property-list property (as of protocol-revision 14) */
@@ -1247,11 +1251,102 @@ bool Channel_Object_Name(
 
     index = Channel_Instance_To_Index(object_instance);
     if (index < Channel_Descr_Size) {
-        sprintf(text_string, "CHANNEL %lu", (unsigned long)object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+        if (Channel_Descr[index].Object_Name) {
+            status = characterstring_init_ansi(
+                object_name, Channel_Descr[index].Object_Name);
+        } else {
+            sprintf(text_string, "CHANNEL %lu", (unsigned long)object_instance);
+            status = characterstring_init_ansi(object_name, text_string);
+        }
     }
 
     return status;
+}
+
+/**
+ * For a given object instance-number, sets the object name
+ *
+ * @param  object_instance - object-instance number of the object
+ * @param  new_name - new name string to set
+ *
+ * @return  true if set successfully
+ */
+bool Channel_Name_Set(uint32_t object_instance, char *new_name)
+{
+    unsigned index;
+
+    index = Channel_Instance_To_Index(object_instance);
+    if (index >= Channel_Descr_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Channel_Mutex);
+    free(Channel_Descr[index].Object_Name);
+    Channel_Descr[index].Object_Name =
+        calloc(strlen(new_name) + 1, sizeof(char));
+    if (Channel_Descr[index].Object_Name) {
+        strcpy(Channel_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&Channel_Mutex);
+    return true;
+}
+
+/**
+ * For a given object instance-number, returns the description string
+ *
+ * @param  object_instance - object-instance number of the object
+ *
+ * @return  pointer to Description string, or NULL if not set
+ */
+bool Channel_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Channel_Instance_To_Index(object_instance);
+    if (index >= Channel_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&Channel_Mutex);
+    if (NULL != Channel_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", Channel_Descr[index].Description);
+    } else {
+        sprintf(text_string, "CHANNEL %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Channel_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+/**
+ * For a given object instance-number, sets the description string
+ *
+ * @param  object_instance - object-instance number of the object
+ * @param  new_descr - new description string to set
+ *
+ * @return  true if set successfully
+ */
+bool Channel_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    unsigned index = Channel_Instance_To_Index(object_instance);
+    if (index >= Channel_Descr_Size) {
+        return false;
+    }
+
+    pthread_mutex_lock(&Channel_Mutex);
+    free(Channel_Descr[index].Description);
+    Channel_Descr[index].Description =
+        calloc(strlen(new_descr) + 1, sizeof(char));
+    if (Channel_Descr[index].Description) {
+        strcpy(Channel_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&Channel_Mutex);
+    return true;
 }
 
 /**
@@ -1623,11 +1718,28 @@ void Channel_Resize(size_t new_size)
 
 void Channel_Add(size_t count)
 {
-    Channel_Resize(Channel_Descr_Size + count);
+    size_t new_size = Channel_Descr_Size + count;
+
+    pthread_mutex_lock(&Channel_Mutex);
+    struct bacnet_channel_object *tmp =
+        realloc(Channel_Descr, sizeof(*Channel_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&Channel_Mutex);
+        return;
+    }
+    Channel_Descr = tmp;
+    Channel_Descr_Size = new_size;
+    pthread_mutex_unlock(&Channel_Mutex);
+
+    Channel_Objects_Init();
 }
 
 void Channel_Free(void)
 {
+    for (unsigned i = 0; i < Channel_Descr_Size; i++) {
+        free(Channel_Descr[i].Object_Name);
+        free(Channel_Descr[i].Description);
+    }
     free(Channel_Descr);
     Channel_Descr = NULL;
     Channel_Descr_Size = 0;
@@ -1635,11 +1747,14 @@ void Channel_Free(void)
 
 void Channel_Alloc(size_t size)
 {
-    Channel_Descr = calloc(size, sizeof (*Channel_Descr));
-    if (NULL != Channel_Descr)
-    {
+    pthread_mutex_lock(&Channel_Mutex);
+    struct bacnet_channel_object *tmp =
+        realloc(Channel_Descr, sizeof(*Channel_Descr) * size);
+    if (NULL != tmp) {
+        Channel_Descr = tmp;
         Channel_Descr_Size = size;
     }
+    pthread_mutex_unlock(&Channel_Mutex);
 }
 
 void Channel_Objects_Init()
@@ -1664,6 +1779,8 @@ void Channel_Objects_Init()
         for (g = 0; g < CONTROL_GROUPS_MAX; g++) {
             Channel_Descr[i].Control_Groups[g] = 0;
         }
+        Channel_Descr[i].Object_Name = NULL;
+        Channel_Descr[i].Description = NULL;
     }
 }
 

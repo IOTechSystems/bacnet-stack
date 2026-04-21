@@ -56,16 +56,13 @@ static ANALOG_OUTPUT_DESCR *AO_Descr = NULL;
 static size_t AO_Descr_Size = 0;
 static pthread_mutex_t AO_Descr_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* we need to have our arrays initialized before answering any calls */
-static bool Analog_Output_Initialized = false;
-
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
     PROP_OBJECT_NAME, PROP_OBJECT_TYPE, PROP_PRESENT_VALUE, PROP_STATUS_FLAGS,
     PROP_EVENT_STATE, PROP_OUT_OF_SERVICE, PROP_UNITS, PROP_PRIORITY_ARRAY,
     PROP_RELINQUISH_DEFAULT, -1 };
 
-static const int Properties_Optional[] = { -1 };
+static const int Properties_Optional[] = { PROP_DESCRIPTION, -1 };
 
 static const int Properties_Proprietary[] = { -1 };
 
@@ -98,6 +95,54 @@ void Analog_Output_Set_Properties(
     {
         Analog_Output_Present_Value_Set(object_instance, AO_LEVEL_NULL, i);
     }
+}
+
+bool Analog_Output_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Analog_Output_Instance_To_Index(object_instance);
+    if (index >= AO_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&AO_Descr_Mutex);
+    if (NULL != AO_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", AO_Descr[index].Description);
+    } else {
+        sprintf(text_string, "ANALOG OUTPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&AO_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Analog_Output_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == AO_Descr) return false;
+
+    unsigned int index;
+    index = Analog_Output_Instance_To_Index(object_instance);
+    if (index >= AO_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&AO_Descr_Mutex);
+    free(AO_Descr[index].Description);
+    AO_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != AO_Descr[index].Description)
+    {
+        strcpy(AO_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&AO_Descr_Mutex);
+
+    return true;
 }
 
 void Analog_Output_Add(size_t count)
@@ -135,6 +180,7 @@ void Analog_Output_Free(void)
     for(unsigned int i=0; i < AO_Descr_Size; i++)
     {
         free(AO_Descr[i].Name);
+        free(AO_Descr[i].Description);
     }
 
     free(AO_Descr);
@@ -148,20 +194,17 @@ void Analog_Output_Objects_Init(void)
 {
     unsigned i, j;
 
-    if (!Analog_Output_Initialized) {
-        Analog_Output_Initialized = true;
-
-        /* initialize all the analog output priority arrays to NULL */
-        pthread_mutex_lock(&AO_Descr_Mutex);
-        for (i = 0; i < AO_Descr_Size; i++) {
-            for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
-                AO_Descr[i].Level[j] = AO_LEVEL_NULL;
-            }
-            AO_Descr[i].Out_Of_Service = false;
-            AO_Descr[i].Name = NULL;
+    /* initialize all the analog output priority arrays to NULL */
+    pthread_mutex_lock(&AO_Descr_Mutex);
+    for (i = 0; i < AO_Descr_Size; i++) {
+        for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
+            AO_Descr[i].Level[j] = AO_LEVEL_NULL;
         }
-        pthread_mutex_unlock(&AO_Descr_Mutex);
+        AO_Descr[i].Out_Of_Service = false;
+        AO_Descr[i].Name = NULL;
+        AO_Descr[i].Description = NULL;
     }
+    pthread_mutex_unlock(&AO_Descr_Mutex);
     return;
 }
 
@@ -386,6 +429,30 @@ void Analog_Output_Out_Of_Service_Set(uint32_t instance, bool oos_flag)
     }
 }
 
+uint16_t Analog_Output_Units(uint32_t object_instance)
+{
+    uint16_t units = UNITS_NO_UNITS;
+    unsigned index = Analog_Output_Instance_To_Index(object_instance);
+
+    if (index < AO_Descr_Size) {
+        units = AO_Descr[index].Units;
+    }
+
+    return units;
+}
+
+bool Analog_Output_Units_Set(uint32_t object_instance, uint16_t value)
+{
+    unsigned index = 0;
+    bool status = false;
+    index = Analog_Output_Instance_To_Index(object_instance);
+    if (index < AO_Descr_Size) {
+        AO_Descr[index].Units = value;
+        status = true;
+    }
+    return status;
+}
+
 /* return apdu len, or BACNET_STATUS_ERROR on error */
 int Analog_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
 {
@@ -411,6 +478,11 @@ int Analog_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
         case PROP_OBJECT_NAME:
             Analog_Output_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Analog_Output_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
@@ -440,7 +512,8 @@ int Analog_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             apdu_len = encode_application_boolean(&apdu[0], state);
             break;
         case PROP_UNITS:
-            apdu_len = encode_application_enumerated(&apdu[0], UNITS_PERCENT);
+            apdu_len = encode_application_enumerated(
+                &apdu[0], Analog_Output_Units(rpdata->object_instance));
             break;
         case PROP_PRIORITY_ARRAY:
             /* Array element zero is the number of elements in the array */

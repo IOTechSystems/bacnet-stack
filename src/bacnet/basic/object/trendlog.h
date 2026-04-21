@@ -117,6 +117,8 @@ extern "C" {
     {
         TL_DATA_REC Logs[TL_MAX_ENTRIES];
         TL_LOG_INFO Log_Info;
+        char *Object_Name;
+        char *Description;
     } TREND_LOG_DESCR;
 
 
@@ -159,6 +161,13 @@ extern "C" {
     bool Trend_Log_Object_Name(
         uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Trend_Log_Name_Set(uint32_t object_instance, char *new_name);
+    BACNET_STACK_EXPORT
+    bool Trend_Log_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Trend_Log_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     int Trend_Log_Read_Property(

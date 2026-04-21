@@ -126,6 +126,8 @@ extern "C" {
 
         LOAD_CONTROL_STATE Load_Control_State;
         LOAD_CONTROL_STATE Load_Control_State_Previously;
+        char *Object_Name;
+        char *Description;
     } LOAD_CONTROL_DESCR;
 
     BACNET_STACK_EXPORT
@@ -154,6 +156,13 @@ extern "C" {
     bool Load_Control_Object_Name(
         uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool Load_Control_Name_Set(uint32_t object_instance, char *new_name);
+    BACNET_STACK_EXPORT
+    bool Load_Control_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Load_Control_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     void Load_Control_Resize(size_t new_size);

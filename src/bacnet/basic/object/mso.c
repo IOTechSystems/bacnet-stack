@@ -29,6 +29,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
 #include "bacnet/bacenum.h"
@@ -50,6 +52,7 @@
 /* Here is our Priority Array.*/
 static MULTISTATE_OUTPUT_DESCR *MSO_Descr = NULL;
 static size_t MSO_Descr_Size = 0;
+static pthread_mutex_t MSO_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Multistate_Output_Properties_Required[] = {
@@ -89,14 +92,34 @@ void Multistate_Output_Resize(size_t new_size)
 
 void Multistate_Output_Add(size_t count)
 {
-    Multistate_Output_Resize(MSO_Descr_Size + count);
+    size_t new_size = MSO_Descr_Size + count;
+
+    pthread_mutex_lock(&MSO_Mutex);
+    MULTISTATE_OUTPUT_DESCR *tmp = realloc(MSO_Descr, sizeof(*MSO_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&MSO_Mutex);
+        return;
+    }
+    MSO_Descr = tmp;
+    MSO_Descr_Size = new_size;
+    pthread_mutex_unlock(&MSO_Mutex);
+
+    Multistate_Output_Objects_Init();
 }
 
 void Multistate_Output_Free(void)
 {
+    if (NULL == MSO_Descr) return;
+
+    pthread_mutex_lock(&MSO_Mutex);
+    for (unsigned i = 0; i < MSO_Descr_Size; i++) {
+        free(MSO_Descr[i].Object_Name);
+        free(MSO_Descr[i].Description);
+    }
     free(MSO_Descr);
     MSO_Descr = NULL;
     MSO_Descr_Size = 0;
+    pthread_mutex_unlock(&MSO_Mutex);
 }
 
 void Multistate_Output_Alloc(size_t size)
@@ -111,17 +134,14 @@ void Multistate_Output_Alloc(size_t size)
 void Multistate_Output_Objects_Init()
 {
     unsigned i, j;
-    static bool initialized = false;
 
-    if (!initialized) {
-        initialized = true;
-
-        /* initialize all the analog output priority arrays to NULL */
-        for (i = 0; i < MSO_Descr_Size; i++) {
-            for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
-                MSO_Descr[i].Level[j] = MULTISTATE_NULL;
-            }
+    /* initialize all the multistate output priority arrays to NULL */
+    for (i = 0; i < MSO_Descr_Size; i++) {
+        for (j = 0; j < BACNET_MAX_PRIORITY; j++) {
+            MSO_Descr[i].Level[j] = MULTISTATE_NULL;
         }
+        MSO_Descr[i].Object_Name = NULL;
+        MSO_Descr[i].Description = NULL;
     }
 
     return;
@@ -202,14 +222,79 @@ bool Multistate_Output_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
     static char text_string[32] = ""; /* okay for single thread */
-    bool status = false;
+    unsigned index;
 
-    if (object_instance < MSO_Descr_Size) {
-        sprintf(text_string, "MULTISTATE OUTPUT %u", object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    index = Multistate_Output_Instance_To_Index(object_instance);
+    if (index >= MSO_Descr_Size) {
+        return false;
     }
 
+    pthread_mutex_lock(&MSO_Mutex);
+    if (NULL != MSO_Descr[index].Object_Name) {
+        snprintf(text_string, 32, "%s", MSO_Descr[index].Object_Name);
+    } else {
+        sprintf(text_string, "MULTISTATE OUTPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&MSO_Mutex);
+
+    return characterstring_init_ansi(object_name, text_string);
+}
+
+bool Multistate_Output_Name_Set(uint32_t object_instance, char *new_name)
+{
+    if (NULL == MSO_Descr) return false;
+    unsigned index = Multistate_Output_Instance_To_Index(object_instance);
+    if (index >= MSO_Descr_Size) return false;
+
+    pthread_mutex_lock(&MSO_Mutex);
+    free(MSO_Descr[index].Object_Name);
+    MSO_Descr[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (MSO_Descr[index].Object_Name) {
+        strcpy(MSO_Descr[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&MSO_Mutex);
+    return true;
+}
+
+bool Multistate_Output_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Multistate_Output_Instance_To_Index(object_instance);
+    if (index >= MSO_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&MSO_Mutex);
+    if (NULL != MSO_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", MSO_Descr[index].Description);
+    } else {
+        sprintf(text_string, "MULTISTATE OUTPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&MSO_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
     return status;
+}
+
+bool Multistate_Output_Description_Set(uint32_t object_instance, char *text_string)
+{
+    if (NULL == MSO_Descr) return false;
+    unsigned index = Multistate_Output_Instance_To_Index(object_instance);
+    if (index >= MSO_Descr_Size) return false;
+
+    pthread_mutex_lock(&MSO_Mutex);
+    free(MSO_Descr[index].Description);
+    MSO_Descr[index].Description = calloc(strlen(text_string) + 1, sizeof(char));
+    if (MSO_Descr[index].Description) {
+        strcpy(MSO_Descr[index].Description, text_string);
+    }
+    pthread_mutex_unlock(&MSO_Mutex);
+    return true;
 }
 
 bool Multistate_Output_Out_Of_Service(uint32_t instance)
@@ -261,9 +346,13 @@ int Multistate_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             /* note: Name and Description don't have to be the same.
                You could make Description writable and different */
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Multistate_Output_Object_Name(
                 rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Multistate_Output_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
