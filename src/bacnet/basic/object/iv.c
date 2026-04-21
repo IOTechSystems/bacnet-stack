@@ -59,7 +59,7 @@ static const int Integer_Value_Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
     PROP_OBJECT_NAME, PROP_OBJECT_TYPE, PROP_PRESENT_VALUE, PROP_STATUS_FLAGS,
     PROP_UNITS, -1 };
 
-static const int Integer_Value_Properties_Optional[] = { PROP_OUT_OF_SERVICE,
+static const int Integer_Value_Properties_Optional[] = { PROP_OUT_OF_SERVICE, PROP_DESCRIPTION,
     -1 };
 
 static const int Integer_Value_Properties_Proprietary[] = { -1 };
@@ -281,6 +281,54 @@ bool Integer_Value_Name_Set(uint32_t object_instance, const char *new_name)
     return true;
 }
 
+bool Integer_Value_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Integer_Value_Instance_To_Index(object_instance);
+    if (index >= I_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&I_Descr_Mutex);
+    if (NULL != I_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", I_Descr[index].Description);
+    } else {
+        sprintf(text_string, "INTEGER VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&I_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Integer_Value_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == I_Descr) return false;
+
+    unsigned int index;
+    index = Integer_Value_Instance_To_Index(object_instance);
+    if (index >= I_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&I_Descr_Mutex);
+    free(I_Descr[index].Description);
+    I_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != I_Descr[index].Description)
+    {
+        strcpy(I_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&I_Descr_Mutex);
+
+    return true;
+}
+
 /**
  * For a given object instance-number, returns the units property value
  *
@@ -403,6 +451,11 @@ int Integer_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
         case PROP_OBJECT_NAME:
             Integer_Value_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Integer_Value_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
@@ -561,6 +614,7 @@ void Integer_Value_Free(void)
     for(unsigned int i=0; i < I_Descr_Size; i++)
     {
         free(I_Descr[i].Name);
+        free(I_Descr[i].Description);
     }
 
     free(I_Descr);
@@ -580,6 +634,7 @@ void Integer_Value_Objects_Init(void)
         I_Descr[index].Out_Of_Service = false;
         I_Descr[index].Units = UNITS_NO_UNITS;
         I_Descr[index].Name = NULL;
+        I_Descr[index].Description = NULL;
     }
     pthread_mutex_unlock(&I_Descr_Mutex);
 }

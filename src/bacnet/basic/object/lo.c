@@ -31,6 +31,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
@@ -68,9 +70,12 @@ struct lighting_output_object {
     float Min_Actual_Value;
     float Max_Actual_Value;
     uint8_t Lighting_Command_Default_Priority;
+    char *Object_Name;
+    char *Description;
 };
 static struct lighting_output_object *Lighting_Output = NULL;
 static size_t Lighting_Output_Size = 0;
+static pthread_mutex_t LO_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These arrays are used by the ReadPropertyMultiple handler and
    property-list property (as of protocol-revision 14) */
@@ -359,18 +364,81 @@ bool Lighting_Output_Present_Value_Relinquish(
 bool Lighting_Output_Object_Name(
     uint32_t object_instance, BACNET_CHARACTER_STRING *object_name)
 {
-    char text_string[32] = "";
+    static char text_string[32] = "";
     bool status = false;
     unsigned index = 0;
 
     index = Lighting_Output_Instance_To_Index(object_instance);
-    if (index < Lighting_Output_Size) {
-        sprintf(
-            text_string, "LIGHTING OUTPUT %lu", (unsigned long)object_instance);
-        status = characterstring_init_ansi(object_name, text_string);
+    if (index >= Lighting_Output_Size) {
+        return status;
     }
 
+    pthread_mutex_lock(&LO_Mutex);
+    if (NULL != Lighting_Output[index].Object_Name) {
+        snprintf(text_string, 32, "%s", Lighting_Output[index].Object_Name);
+    } else {
+        sprintf(text_string, "LIGHTING OUTPUT %lu", (unsigned long)object_instance);
+    }
+    pthread_mutex_unlock(&LO_Mutex);
+
+    status = characterstring_init_ansi(object_name, text_string);
+
     return status;
+}
+
+bool Lighting_Output_Name_Set(uint32_t object_instance, char *new_name)
+{
+    unsigned index = Lighting_Output_Instance_To_Index(object_instance);
+    if (index >= Lighting_Output_Size) return false;
+
+    pthread_mutex_lock(&LO_Mutex);
+    free(Lighting_Output[index].Object_Name);
+    Lighting_Output[index].Object_Name = calloc(strlen(new_name) + 1, sizeof(char));
+    if (Lighting_Output[index].Object_Name) {
+        strcpy(Lighting_Output[index].Object_Name, new_name);
+    }
+    pthread_mutex_unlock(&LO_Mutex);
+    return true;
+}
+
+bool Lighting_Output_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned index;
+    bool status = false;
+
+    index = Lighting_Output_Instance_To_Index(object_instance);
+    if (index >= Lighting_Output_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&LO_Mutex);
+    if (NULL != Lighting_Output[index].Description) {
+        snprintf(text_string, 32, "%s", Lighting_Output[index].Description);
+    } else {
+        sprintf(text_string, "LIGHTING OUTPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&LO_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Lighting_Output_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    unsigned index = Lighting_Output_Instance_To_Index(object_instance);
+    if (index >= Lighting_Output_Size) return false;
+
+    pthread_mutex_lock(&LO_Mutex);
+    free(Lighting_Output[index].Description);
+    Lighting_Output[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (Lighting_Output[index].Description) {
+        strcpy(Lighting_Output[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&LO_Mutex);
+    return true;
 }
 
 /**
@@ -925,6 +993,11 @@ int Lighting_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
+        case PROP_DESCRIPTION:
+            Lighting_Output_Description(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
         case PROP_OBJECT_TYPE:
             apdu_len =
                 encode_application_enumerated(&apdu[0], OBJECT_LIGHTING_OUTPUT);
@@ -1293,14 +1366,34 @@ void Lighting_Output_Resize(size_t new_size)
 
 void Lighting_Output_Add(size_t count)
 {
-    Lighting_Output_Resize(Lighting_Output_Size + count);
+    size_t new_size = Lighting_Output_Size + count;
+
+    pthread_mutex_lock(&LO_Mutex);
+    struct lighting_output_object *tmp = realloc(Lighting_Output, sizeof(*Lighting_Output) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&LO_Mutex);
+        return;
+    }
+    Lighting_Output_Size = new_size;
+    Lighting_Output = tmp;
+    pthread_mutex_unlock(&LO_Mutex);
+
+    Lighting_Output_Objects_Init();
 }
 
 void Lighting_Output_Free(void)
 {
+    if (NULL == Lighting_Output) return;
+
+    pthread_mutex_lock(&LO_Mutex);
+    for (unsigned i = 0; i < Lighting_Output_Size; i++) {
+        free(Lighting_Output[i].Object_Name);
+        free(Lighting_Output[i].Description);
+    }
     free(Lighting_Output);
     Lighting_Output = NULL;
     Lighting_Output_Size = 0;
+    pthread_mutex_unlock(&LO_Mutex);
 }
 
 void Lighting_Output_Alloc(size_t size)
@@ -1346,6 +1439,8 @@ void Lighting_Output_Objects_Init()
         Lighting_Output[i].Min_Actual_Value = 0.0;
         Lighting_Output[i].Max_Actual_Value = 100.0;
         Lighting_Output[i].Lighting_Command_Default_Priority = 16;
+        Lighting_Output[i].Object_Name = NULL;
+        Lighting_Output[i].Description = NULL;
     }
 
     return;

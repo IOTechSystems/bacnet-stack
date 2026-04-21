@@ -50,6 +50,7 @@ extern "C" {
         int32_t Present_Value;
         uint16_t Units;
         char * Name;
+        char * Description;
     } INTEGER_DESCR;
 
     BACNET_STACK_EXPORT
@@ -123,8 +124,9 @@ extern "C" {
         float value);
 
     BACNET_STACK_EXPORT
-    char *Integer_Value_Description(
-        uint32_t instance);
+    bool Integer_Value_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Integer_Value_Description_Set(
         uint32_t instance,

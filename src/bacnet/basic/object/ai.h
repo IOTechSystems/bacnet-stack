@@ -53,6 +53,7 @@ extern "C" {
         float COV_Increment;
         bool Changed;
         char *Name;
+        char *Description;
 #if defined(INTRINSIC_REPORTING)
         uint32_t Time_Delay;
         uint32_t Notification_Class;
@@ -123,12 +124,12 @@ extern "C" {
         const char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Analog_Input_Description(
-        uint32_t instance);
+    bool Analog_Input_Description(
+        uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Analog_Input_Description_Set(
         uint32_t instance,
-        char *new_name);
+        const char *new_name);
 
     BACNET_STACK_EXPORT
     bool Analog_Input_Units_Set(

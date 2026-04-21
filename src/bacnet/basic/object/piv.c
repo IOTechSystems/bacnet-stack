@@ -53,7 +53,7 @@ static const int PositiveInteger_Value_Properties_Required[] = {
 };
 
 static const int PositiveInteger_Value_Properties_Optional[] = {
-    PROP_OUT_OF_SERVICE, -1
+    PROP_OUT_OF_SERVICE, PROP_DESCRIPTION, -1
 };
 
 static const int PositiveInteger_Value_Properties_Proprietary[] = { -1 };
@@ -140,6 +140,7 @@ void PositiveInteger_Value_Free(void)
     for(unsigned int i=0; i < PIV_Descr_Size; i++)
     {
         free(PIV_Descr[i].Name);
+        free(PIV_Descr[i].Description);
     }
 
     free(PIV_Descr);
@@ -159,6 +160,7 @@ void PositiveInteger_Value_Objects_Init(void)
         PIV_Descr[i].Out_Of_Service = false;
         PIV_Descr[i].Present_Value = 0;
         PIV_Descr[i].Name = NULL;
+        PIV_Descr[i].Description = NULL;
     }
     pthread_mutex_unlock(&PIV_Descr_Mutex);
 }
@@ -307,12 +309,107 @@ bool PositiveInteger_Value_Name_Set(uint32_t object_instance, const char *new_na
     return true;
 }
 
+bool PositiveInteger_Value_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[48] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = PositiveInteger_Value_Instance_To_Index(object_instance);
+    if (index >= PIV_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&PIV_Descr_Mutex);
+    if (NULL != PIV_Descr[index].Description) {
+        snprintf(text_string, 48, "%s", PIV_Descr[index].Description);
+    } else {
+        sprintf(text_string, "POSITIVE INTEGER VALUE %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&PIV_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool PositiveInteger_Value_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == PIV_Descr) return false;
+
+    unsigned int index;
+    index = PositiveInteger_Value_Instance_To_Index(object_instance);
+    if (index >= PIV_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&PIV_Descr_Mutex);
+    free(PIV_Descr[index].Description);
+    PIV_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != PIV_Descr[index].Description)
+    {
+        strcpy(PIV_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&PIV_Descr_Mutex);
+
+    return true;
+}
+
+/**
+ * For a given object instance-number, returns the units property value
+ *  
+ * @param  object_instance - object-instance number of the object
+ *  
+ * @return  units property value
+ */ 
+uint16_t PositiveInteger_Value_Units(uint32_t instance)
+{
+    unsigned int index;
+    uint16_t units = UNITS_NO_UNITS;
+ 
+    index = PositiveInteger_Value_Instance_To_Index(instance);
+    if (index < PIV_Descr_Size) {
+        pthread_mutex_lock(&PIV_Descr_Mutex);
+        units = PIV_Descr[index].Units;
+        pthread_mutex_unlock(&PIV_Descr_Mutex);
+    }
+
+    return units;
+}
+
+/** 
+ * For a given object instance-number, sets the units property value
+ *      
+ * @param object_instance - object-instance number of the object
+ * @param units - units property value
+ *  
+ * @return true if the units property value was set
+ */ 
+bool PositiveInteger_Value_Units_Set(uint32_t instance, uint16_t units)
+{
+    unsigned int index = 0;
+    bool status = false;
+ 
+    index = PositiveInteger_Value_Instance_To_Index(instance);
+    if (index < PIV_Descr_Size) {
+        pthread_mutex_lock(&PIV_Descr_Mutex);
+        PIV_Descr[index].Units = units;
+        pthread_mutex_unlock(&PIV_Descr_Mutex);
+        status = true;
+    }
+
+    return status;
+}   
+
 /* return apdu len, or BACNET_STATUS_ERROR on error */
 int PositiveInteger_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
 {
     int apdu_len = 0; /* return value */
     BACNET_BIT_STRING bit_string;
     BACNET_CHARACTER_STRING char_string;
+    uint32_t units = 0;
     unsigned object_index = 0;
     bool state = false;
     uint8_t *apdu = NULL;
@@ -348,6 +445,12 @@ int PositiveInteger_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 encode_application_character_string(&apdu[0], &char_string);
             break;
 
+        case PROP_DESCRIPTION:
+            PositiveInteger_Value_Description(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+
         case PROP_OBJECT_TYPE:
             apdu_len = encode_application_enumerated(
                 &apdu[0], OBJECT_POSITIVE_INTEGER_VALUE);
@@ -370,17 +473,9 @@ int PositiveInteger_Value_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             break;
 
         case PROP_UNITS:
-            apdu_len =
-                encode_application_enumerated(&apdu[0], CurrentAV->Units);
+            units = PositiveInteger_Value_Units(rpdata->object_instance);
+            apdu_len = encode_application_enumerated(&apdu[0], units);
             break;
-            /* 	BACnet Testing Observed Incident oi00109
-                    Positive Integer Value / Units returned wrong datatype -
-               missing break. Revealed by BACnet Test Client v1.8.16 (
-               www.bac-test.com/bacnet-test-client-download ) BITS: BIT00031 BC
-               135.1: 9.20.1.7 BC 135.1: 9.20.1.9 Any discussions can be
-               directed to edward@bac-test.com Please feel free to remove this
-               comment when my changes have been reviewed by all interested
-               parties. Say 6 months -> September 2016 */
 
         case PROP_OUT_OF_SERVICE:
             state = CurrentAV->Out_Of_Service;

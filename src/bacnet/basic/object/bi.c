@@ -120,6 +120,54 @@ uint32_t Binary_Input_Index_To_Instance(unsigned index)
     return index;
 }
 
+bool Binary_Input_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Binary_Input_Instance_To_Index(object_instance);
+    if (index >= BI_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&BI_Descr_Mutex);
+    if (NULL != BI_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", BI_Descr[index].Description);
+    } else {
+        sprintf(text_string, "BINARY INPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&BI_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Binary_Input_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == BI_Descr) return false;
+
+    unsigned int index;
+    index = Binary_Input_Instance_To_Index(object_instance);
+    if (index >= BI_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&BI_Descr_Mutex);
+    free(BI_Descr[index].Description);
+    BI_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != BI_Descr[index].Description)
+    {
+        strcpy(BI_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&BI_Descr_Mutex);
+
+    return true;
+}
+
 void Binary_Input_Add(size_t count)
 {
     size_t prev_size = BI_Descr_Size;
@@ -162,6 +210,7 @@ void Binary_Input_Free(void)
     for(unsigned int i=0; i < BI_Descr_Size; i++)
     {
         free(BI_Descr[i].Name);
+        free(BI_Descr[i].Description);
     }
 
     free(BI_Descr);
@@ -172,23 +221,19 @@ void Binary_Input_Free(void)
 
 void Binary_Input_Objects_Init(void)
 {
-    static bool initialized = false;
     unsigned i;
 
-    if (!initialized) {
-        initialized = true;
-
-        /* initialize all the values */
-        pthread_mutex_lock(&BI_Descr_Mutex);
-        for (i = 0; i < BI_Descr_Size; i++) {
-            BI_Descr[i].Present_Value = BINARY_ACTIVE;
-            BI_Descr[i].Out_Of_Service = false;
-            BI_Descr[i].Name = NULL;
-            BI_Descr[i].Polarity = POLARITY_NORMAL;
-        }
-        
-        pthread_mutex_unlock(&BI_Descr_Mutex);
+    /* initialize all the values */
+    pthread_mutex_lock(&BI_Descr_Mutex);
+    for (i = 0; i < BI_Descr_Size; i++) {
+        BI_Descr[i].Present_Value = BINARY_ACTIVE;
+        BI_Descr[i].Out_Of_Service = false;
+        BI_Descr[i].Name = NULL;
+        BI_Descr[i].Description = NULL;
+        BI_Descr[i].Polarity = POLARITY_NORMAL;
     }
+
+    pthread_mutex_unlock(&BI_Descr_Mutex);
 }
 
 void Binary_Input_Init(void)
@@ -480,9 +525,13 @@ int Binary_Input_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 &apdu[0], OBJECT_BINARY_INPUT, rpdata->object_instance);
             break;
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             /* note: object name must be unique in our device */
             Binary_Input_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Binary_Input_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

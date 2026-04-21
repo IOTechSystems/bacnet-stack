@@ -104,6 +104,54 @@ void Binary_Output_Set_Properties(
 }
 
 
+bool Binary_Output_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    static char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Binary_Output_Instance_To_Index(object_instance);
+    if (index >= BO_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&BO_Descr_Mutex);
+    if (NULL != BO_Descr[index].Description) {
+        snprintf(text_string, 32, "%s", BO_Descr[index].Description);
+    } else {
+        sprintf(text_string, "BINARY OUTPUT %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&BO_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Binary_Output_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == BO_Descr) return false;
+
+    unsigned int index;
+    index = Binary_Output_Instance_To_Index(object_instance);
+    if (index >= BO_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&BO_Descr_Mutex);
+    free(BO_Descr[index].Description);
+    BO_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != BO_Descr[index].Description)
+    {
+        strcpy(BO_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&BO_Descr_Mutex);
+
+    return true;
+}
+
 void Binary_Output_Add(size_t count)
 {
     size_t prev_size = BO_Descr_Size;
@@ -147,6 +195,7 @@ void Binary_Output_Free(void)
     for(unsigned int i=0; i < BO_Descr_Size; i++)
     {
         free(BO_Descr[i].Name);
+        free(BO_Descr[i].Description);
     }
 
     free(BO_Descr);
@@ -159,22 +208,18 @@ void Binary_Output_Free(void)
 void Binary_Output_Objects_Init(void)
 {
     unsigned i, j;
-    static bool initialized = false;
 
-    if (!initialized) {
-        initialized = true;
-
-        /* initialize all the analog output priority arrays to NULL */
-        pthread_mutex_lock(&BO_Descr_Mutex);
-        for (i = 0; i < BO_Descr_Size; i++) {
-            for (j = 0; j < BACNET_MAX_PRIORITY; j++)
-            {    
-                BO_Descr[i].Level[j] = BINARY_NULL;
-            }
-            BO_Descr[i].Name = NULL;
+    /* initialize all the analog output priority arrays to NULL */
+    pthread_mutex_lock(&BO_Descr_Mutex);
+    for (i = 0; i < BO_Descr_Size; i++) {
+        for (j = 0; j < BACNET_MAX_PRIORITY; j++)
+        {
+            BO_Descr[i].Level[j] = BINARY_NULL;
         }
-        pthread_mutex_unlock(&BO_Descr_Mutex);
+        BO_Descr[i].Name = NULL;
+        BO_Descr[i].Description = NULL;
     }
+    pthread_mutex_unlock(&BO_Descr_Mutex);
 }
 
 void Binary_Output_Init(void)
@@ -365,8 +410,12 @@ int Binary_Output_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
             /* note: Name and Description don't have to be the same.
                You could make Description writable and different */
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Binary_Output_Object_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Binary_Output_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;

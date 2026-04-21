@@ -41,6 +41,8 @@ extern "C" {
         unsigned Event_State:3;
         bool Out_Of_Service;
         BACNET_OCTET_STRING Present_Value;
+        char *Object_Name;
+        char *Description;
     } OCTETSTRING_VALUE_DESCR;
 
 
@@ -60,6 +62,8 @@ extern "C" {
     BACNET_STACK_EXPORT
     bool OctetString_Value_Object_Name(uint32_t object_instance,
         BACNET_CHARACTER_STRING * object_name);
+    BACNET_STACK_EXPORT
+    bool OctetString_Value_Name_Set(uint32_t object_instance, char *new_name);
 
     BACNET_STACK_EXPORT
     int OctetString_Value_Read_Property(BACNET_READ_PROPERTY_DATA * rpdata);
@@ -85,7 +89,8 @@ extern "C" {
         BACNET_PROPERTY_VALUE * value_list);
 
     BACNET_STACK_EXPORT
-    char *OctetString_Value_Description(uint32_t instance);
+    bool OctetString_Value_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool OctetString_Value_Description_Set(uint32_t instance,
         char *new_name);

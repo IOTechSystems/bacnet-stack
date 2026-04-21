@@ -146,6 +146,11 @@ extern "C" {
     BACNET_STACK_EXPORT
     bool Channel_Name_Set(uint32_t object_instance,
         char *new_name);
+    BACNET_STACK_EXPORT
+    bool Channel_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
+    BACNET_STACK_EXPORT
+    bool Channel_Description_Set(uint32_t instance, char *new_name);
 
     BACNET_STACK_EXPORT
     int Channel_Read_Property(BACNET_READ_PROPERTY_DATA * rpdata);

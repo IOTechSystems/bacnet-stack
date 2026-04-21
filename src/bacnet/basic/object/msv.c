@@ -29,6 +29,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
 
 #include "bacnet/bacdef.h"
 #include "bacnet/bacdcode.h"
@@ -43,6 +45,7 @@
 
 static MULTISTATE_VALUE_DESCR *MSV_Descr = NULL;
 static size_t MSV_Descr_Size = 0;
+static pthread_mutex_t MSV_Descr_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* These three arrays are used by the ReadPropertyMultiple handler */
 static const int Properties_Required[] = { PROP_OBJECT_IDENTIFIER,
@@ -79,11 +82,34 @@ void Multistate_Value_Resize(size_t new_size)
 
 void Multistate_Value_Add(size_t count)
 {
-    Multistate_Value_Resize(MSV_Descr_Size + count);
+    size_t prev_size = MSV_Descr_Size;
+    size_t new_size = MSV_Descr_Size + count;
+
+    pthread_mutex_lock(&MSV_Descr_Mutex);
+    MULTISTATE_VALUE_DESCR *tmp = realloc(MSV_Descr, sizeof(*MSV_Descr) * new_size);
+    if (NULL == tmp) {
+        pthread_mutex_unlock(&MSV_Descr_Mutex);
+        return;
+    }
+    MSV_Descr_Size = new_size;
+    MSV_Descr = tmp;
+    pthread_mutex_unlock(&MSV_Descr_Mutex);
+
+    Multistate_Value_Objects_Init();
+
+    char name_buffer[64];
+    for (size_t i = prev_size; i < new_size; i++) {
+        snprintf(name_buffer, 64, "multistate_value_%zu", i);
+        Multistate_Value_Name_Set(i, name_buffer);
+    }
 }
 
 void Multistate_Value_Free(void)
 {
+    for (unsigned i = 0; i < MSV_Descr_Size; i++) {
+        free(MSV_Descr[i].Object_Name);
+        free(MSV_Descr[i].Object_Description);
+    }
     free(MSV_Descr);
     MSV_Descr = NULL;
     MSV_Descr_Size = 0;
@@ -105,8 +131,8 @@ void Multistate_Value_Objects_Init()
     /* initialize all the analog output priority arrays to NULL */
     for (i = 0; i < MSV_Descr_Size; i++) {
         MSV_Descr[i].Present_Value = 1;
-        sprintf(&MSV_Descr[i].Object_Name[0], "MULTISTATE VALUE %u", i);
-        sprintf(&MSV_Descr[i].Object_Description[0], "MULTISTATE VALUE %u", i);
+        MSV_Descr[i].Object_Name = NULL;
+        MSV_Descr[i].Object_Description = NULL;
     }
 
     return;
@@ -233,6 +259,9 @@ char *Multistate_Value_Description(uint32_t object_instance)
     index = Multistate_Value_Instance_To_Index(object_instance);
     if (index < MSV_Descr_Size) {
         pName = MSV_Descr[index].Object_Description;
+        if (pName == NULL) {
+            pName = "";
+        }
     }
 
     return pName;
@@ -241,24 +270,24 @@ char *Multistate_Value_Description(uint32_t object_instance)
 bool Multistate_Value_Description_Set(uint32_t object_instance, char *new_name)
 {
     unsigned index = 0; /* offset from instance lookup */
-    size_t i = 0; /* loop counter */
     bool status = false; /* return value */
 
+    if (NULL == MSV_Descr) return false;
     index = Multistate_Value_Instance_To_Index(object_instance);
     if (index < MSV_Descr_Size) {
-        status = true;
+        pthread_mutex_lock(&MSV_Descr_Mutex);
+        free(MSV_Descr[index].Object_Description);
         if (new_name) {
-            for (i = 0; i < sizeof(MSV_Descr[index].Object_Description); i++) {
-                MSV_Descr[index].Object_Description[i] = new_name[i];
-                if (new_name[i] == 0) {
-                    break;
-                }
+            MSV_Descr[index].Object_Description =
+                calloc(strlen(new_name) + 1, sizeof(char));
+            if (MSV_Descr[index].Object_Description) {
+                strcpy(MSV_Descr[index].Object_Description, new_name);
             }
         } else {
-            for (i = 0; i < sizeof(MSV_Descr[index].Object_Description); i++) {
-                MSV_Descr[index].Object_Description[i] = 0;
-            }
+            MSV_Descr[index].Object_Description = NULL;
         }
+        pthread_mutex_unlock(&MSV_Descr_Mutex);
+        status = true;
     }
 
     return status;
@@ -269,10 +298,17 @@ bool Multistate_Value_Object_Name(
 {
     unsigned index = 0; /* offset from instance lookup */
     bool status = false;
+    char name_buffer[64];
 
     index = Multistate_Value_Instance_To_Index(object_instance);
     if (index < MSV_Descr_Size) {
-        status = characterstring_init_ansi(object_name, MSV_Descr[index].Object_Name);
+        if (MSV_Descr[index].Object_Name) {
+            status = characterstring_init_ansi(object_name, MSV_Descr[index].Object_Name);
+        } else {
+            snprintf(name_buffer, sizeof(name_buffer),
+                "multistate_value_%u", index);
+            status = characterstring_init_ansi(object_name, name_buffer);
+        }
     }
 
     return status;
@@ -282,25 +318,24 @@ bool Multistate_Value_Object_Name(
 bool Multistate_Value_Name_Set(uint32_t object_instance, char *new_name)
 {
     unsigned index = 0; /* offset from instance lookup */
-    size_t i = 0; /* loop counter */
     bool status = false; /* return value */
 
+    if (NULL == MSV_Descr) return false;
     index = Multistate_Value_Instance_To_Index(object_instance);
     if (index < MSV_Descr_Size) {
-        status = true;
-        /* FIXME: check to see if there is a matching name */
+        pthread_mutex_lock(&MSV_Descr_Mutex);
+        free(MSV_Descr[index].Object_Name);
         if (new_name) {
-            for (i = 0; i < sizeof(MSV_Descr[index].Object_Name); i++) {
-                MSV_Descr[index].Object_Name[i] = new_name[i];
-                if (new_name[i] == 0) {
-                    break;
-                }
+            MSV_Descr[index].Object_Name =
+                calloc(strlen(new_name) + 1, sizeof(char));
+            if (MSV_Descr[index].Object_Name) {
+                strcpy(MSV_Descr[index].Object_Name, new_name);
             }
         } else {
-            for (i = 0; i < sizeof(MSV_Descr[index].Object_Name); i++) {
-                MSV_Descr[index].Object_Name[i] = 0;
-            }
+            MSV_Descr[index].Object_Name = NULL;
         }
+        pthread_mutex_unlock(&MSV_Descr_Mutex);
+        status = true;
     }
 
     return status;

@@ -16,7 +16,9 @@ extern "C" {
     typedef struct accumulator_descr {
         BACNET_UNSIGNED_INTEGER Present_Value;
         int32_t Scale;
+        int16_t Units;
         char *Name;
+        char *Description;
     }ACCUMULATOR_DESCR;
 
 
@@ -59,8 +61,8 @@ extern "C" {
         const char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Accumulator_Description(
-        uint32_t instance);
+    bool Accumulator_Description(
+        uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Accumulator_Description_Set(
         uint32_t instance,

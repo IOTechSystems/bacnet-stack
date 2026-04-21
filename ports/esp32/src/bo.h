@@ -62,8 +62,9 @@ extern "C" {
         uint32_t object_instance,
         char *new_name);
 
-    char *Binary_Output_Description(
-        uint32_t instance);
+    bool Binary_Output_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     bool Binary_Output_Description_Set(
         uint32_t instance,
         char *new_name);

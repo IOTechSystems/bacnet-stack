@@ -40,8 +40,9 @@ extern "C" {
     typedef struct binary_output_descr
     {
         BACNET_BINARY_PV Level[BACNET_MAX_PRIORITY];
-        bool Out_Of_Service; 
+        bool Out_Of_Service;
         char *Name;
+        char *Description;
     } BINARY_OUTPUT_DESCR;
 
     BACNET_STACK_EXPORT
@@ -87,8 +88,9 @@ extern "C" {
         const char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Binary_Output_Description(
-        uint32_t instance);
+    bool Binary_Output_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Binary_Output_Description_Set(
         uint32_t instance,

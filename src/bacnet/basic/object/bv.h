@@ -42,6 +42,7 @@ extern "C" {
         BACNET_BINARY_PV Level[BACNET_MAX_PRIORITY];
         bool Out_Of_Service;
         char * Name;
+        char * Description;
     } BINARY_VALUE_DESCR;
 
     BACNET_STACK_EXPORT
@@ -87,8 +88,9 @@ extern "C" {
         const char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Binary_Value_Description(
-        uint32_t instance);
+    bool Binary_Value_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Binary_Value_Description_Set(
         uint32_t instance,
@@ -154,8 +156,9 @@ extern "C" {
         bool value);
 
     BACNET_STACK_EXPORT
-    char *Binary_Value_Description(
-        uint32_t instance);
+    bool Binary_Value_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Binary_Value_Description_Set(
         uint32_t object_instance,

@@ -265,12 +265,25 @@ bool Accumulator_Present_Value_Set(
 uint16_t Accumulator_Units(uint32_t object_instance)
 {
     uint16_t units = UNITS_NO_UNITS;
+    unsigned index = Accumulator_Instance_To_Index(object_instance);
 
-    if (object_instance < Acc_Descr_Size) {
-        units = UNITS_WATT_HOURS;
+    if (index < Acc_Descr_Size) {
+        units = Acc_Descr[index].Units;
     }
 
     return units;
+}
+
+bool Accumulator_Units_Set(uint32_t object_instance, uint16_t value)
+{
+    unsigned index = 0;
+    bool status = false;
+    index = Accumulator_Instance_To_Index(object_instance);
+    if (index < Acc_Descr_Size) {
+        Acc_Descr[index].Units = value;
+        status = true;
+    }
+    return status;
 }
 
 /**
@@ -373,8 +386,12 @@ int Accumulator_Read_Property(BACNET_READ_PROPERTY_DATA *rpdata)
                 &apdu[0], OBJECT_ACCUMULATOR, rpdata->object_instance);
             break;
         case PROP_OBJECT_NAME:
-        case PROP_DESCRIPTION:
             Accumulator_Name(rpdata->object_instance, &char_string);
+            apdu_len =
+                encode_application_character_string(&apdu[0], &char_string);
+            break;
+        case PROP_DESCRIPTION:
+            Accumulator_Description(rpdata->object_instance, &char_string);
             apdu_len =
                 encode_application_character_string(&apdu[0], &char_string);
             break;
@@ -483,6 +500,57 @@ bool Accumulator_Write_Property(BACNET_WRITE_PROPERTY_DATA *wp_data)
     return false;
 }
 
+bool Accumulator_Description(
+    uint32_t object_instance, BACNET_CHARACTER_STRING *object_descr)
+{
+    char text_string[32] = "";
+    unsigned int index;
+    bool status = false;
+
+    index = Accumulator_Instance_To_Index(object_instance);
+    if (index >= Acc_Descr_Size) {
+        return status;
+    }
+
+    pthread_mutex_lock(&Acc_Descr_Mutex);
+    if (NULL != Acc_Descr[index].Description)
+    {
+        snprintf(text_string, 32, "%s", Acc_Descr[index].Description);
+    }
+    else
+    {
+        sprintf(text_string, "ACCUMULATOR %lu", (unsigned long)index);
+    }
+    pthread_mutex_unlock(&Acc_Descr_Mutex);
+
+    status = characterstring_init_ansi(object_descr, text_string);
+
+    return status;
+}
+
+bool Accumulator_Description_Set(uint32_t object_instance, char *new_descr)
+{
+    if (NULL == Acc_Descr) return false;
+
+    unsigned int index;
+    index = Accumulator_Instance_To_Index(object_instance);
+    if (index >= Acc_Descr_Size)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&Acc_Descr_Mutex);
+    free(Acc_Descr[index].Description);
+    Acc_Descr[index].Description = calloc(strlen(new_descr) + 1, sizeof(char));
+    if (NULL != Acc_Descr[index].Description)
+    {
+        strcpy(Acc_Descr[index].Description, new_descr);
+    }
+    pthread_mutex_unlock(&Acc_Descr_Mutex);
+
+    return true;
+}
+
 void Accumulator_Add(size_t count)
 {
     size_t prev_size = Acc_Descr_Size;
@@ -520,6 +588,7 @@ void Accumulator_Free(void)
     for(unsigned int i=0; i < Acc_Descr_Size; i++)
     {
         free(Acc_Descr[i].Name);
+        free(Acc_Descr[i].Description);
     }
 
     free(Acc_Descr);
@@ -539,6 +608,8 @@ void Accumulator_Objects_Init(void)
         Accumulator_Present_Value_Set(i, unsigned_value);
         unsigned_value |= (unsigned_value << 1);
         Acc_Descr[i].Name = NULL;
+        Acc_Descr[i].Description = NULL;
+        Acc_Descr[i].Units = UNITS_NO_UNITS;
     }
 }
 

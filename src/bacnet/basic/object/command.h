@@ -86,6 +86,8 @@ extern "C" {
         bool In_Process;
         bool All_Writes_Successful;
         BACNET_ACTION_LIST Action[MAX_COMMAND_ACTIONS];
+        char *Object_Name;
+        char *Description;
     } COMMAND_DESCR;
 
     BACNET_STACK_EXPORT
@@ -120,8 +122,9 @@ extern "C" {
         char *new_name);
 
     BACNET_STACK_EXPORT
-    char *Command_Description(
-        uint32_t instance);
+    bool Command_Description(
+        uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool Command_Description_Set(
         uint32_t instance,

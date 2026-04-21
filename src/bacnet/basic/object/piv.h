@@ -42,6 +42,7 @@ extern "C" {
         BACNET_UNSIGNED_INTEGER Present_Value;
         uint16_t Units;
         char *Name;
+        char *Description;
     } POSITIVEINTEGER_VALUE_DESCR;
 
 
@@ -96,10 +97,19 @@ extern "C" {
         BACNET_PROPERTY_VALUE * value_list);
 
     BACNET_STACK_EXPORT
-    char *PositiveInteger_Value_Description(uint32_t instance);
+    bool PositiveInteger_Value_Description(uint32_t instance,
+        BACNET_CHARACTER_STRING *object_descr);
     BACNET_STACK_EXPORT
     bool PositiveInteger_Value_Description_Set(uint32_t instance,
         char *new_name);
+
+    BACNET_STACK_EXPORT
+    uint16_t PositiveInteger_Value_Units(
+        uint32_t instance);
+    BACNET_STACK_EXPORT
+    bool PositiveInteger_Value_Units_Set(
+        uint32_t instance,
+        uint16_t unit);
 
     BACNET_STACK_EXPORT
     bool PositiveInteger_Value_Out_Of_Service(uint32_t instance);
