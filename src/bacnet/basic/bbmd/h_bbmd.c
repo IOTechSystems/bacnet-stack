@@ -101,9 +101,16 @@ typedef enum
   BBMD_REG_SUCCESS
 } bbmd_reg_t;
 
-/** Mutex and condition variable for checking if BBMD registration has been successful */
-static pthread_mutex_t mutex;
-static pthread_cond_t cond;
+/** Mutex and condition variable for checking if BBMD registration has been
+ * successful. Statically initialized (not pthread_*_init()'d at runtime)
+ * because the BVLC_RESULT handler below locks/signals them unconditionally
+ * on any incoming BVLC_RESULT, including one that arrives before
+ * bvlc_register_with_bbmd() is ever called -- using them before a runtime
+ * init would be undefined behavior otherwise. Never destroyed, for the
+ * same reason: they must stay valid for the life of the process, not just
+ * for the duration of one registration attempt. */
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static bbmd_reg_t bbmd_reg;
 
 /**
@@ -1161,18 +1168,10 @@ int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
     BVLC_Buffer_Len = bvlc_encode_register_foreign_device(
         &BVLC_Buffer[0], sizeof(BVLC_Buffer), ttl_seconds);
 
-    pthread_mutex_init (&mutex, NULL);
-
     pthread_mutex_lock (&mutex);
     /* Set the initial value of the BBMD registration bool to false */
     bbmd_reg = BBMD_REG_UNSET;
     pthread_mutex_unlock (&mutex);
-
-    /* bvlc_handler() still calls pthread_cond_signal(&cond) on receipt of
-     * a BVLC_RESULT (see below) -- kept initialized even though nothing
-     * waits on it anymore below, since a signal on an uninitialized
-     * condvar would be undefined behavior. */
-    pthread_cond_init (&cond, NULL);
 
     int retval = bip_send_mpdu(bbmd_addr, &BVLC_Buffer[0], BVLC_Buffer_Len);
     if (retval == -1)
@@ -1201,8 +1200,6 @@ int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
         pthread_mutex_unlock (&mutex);
         if (received_response) break;
     }
-
-    pthread_mutex_destroy(&mutex);
 
     /* Fail if the BBMD registration was not successful */
     if (bbmd_reg != BBMD_REG_SUCCESS)
