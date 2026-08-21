@@ -38,6 +38,7 @@
 #include <string.h> /* for memcpy */
 #include <pthread.h>
 #include <sys/time.h>
+#include <time.h>
 #include "bacnet/bacdcode.h"
 #include "bacnet/datalink/bip.h"
 #include "bacnet/datalink/bvlc.h"
@@ -1167,32 +1168,40 @@ int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
     bbmd_reg = BBMD_REG_UNSET;
     pthread_mutex_unlock (&mutex);
 
-    /* Setup a 30 second condition variable wait */
+    /* bvlc_handler() still calls pthread_cond_signal(&cond) on receipt of
+     * a BVLC_RESULT (see below) -- kept initialized even though nothing
+     * waits on it anymore below, since a signal on an uninitialized
+     * condvar would be undefined behavior. */
     pthread_cond_init (&cond, NULL);
-    time_t timeout_seconds = 3;
-    struct timeval now;
-    struct timespec timeout;
-    int timeout_count = 0;
 
     int retval = bip_send_mpdu(bbmd_addr, &BVLC_Buffer[0], BVLC_Buffer_Len);
     if (retval == -1)
     {
         return retval;
     }
-    while (timeout_count < 10)
+
+    /* Nothing else reads the BIP socket at this point in startup -- the
+     * main receive loop (bip_receive() via datalink_receive()) hasn't
+     * started yet, so bvlc_handler() can never run to set bbmd_reg unless
+     * THIS call also pumps the socket itself. A pthread_cond_timedwait()
+     * here (the original approach) can never be signaled: nothing else in
+     * this process reads the BBMD's real ACK/NAK off the wire during the
+     * wait, so it always timed out and reported failure even when the
+     * BBMD's registration genuinely succeeded. Poll bip_receive()
+     * directly instead -- it invokes bvlc_handler() internally on any
+     * packet received, which is what actually sets bbmd_reg. */
+    BACNET_ADDRESS bbmd_reply_src = { 0 };
+    uint8_t bbmd_reply_mtu[MAX_MPDU] = { 0 };
+    time_t deadline = time(NULL) + 30;
+    while (time(NULL) < deadline)
     {
-        gettimeofday (&now, NULL);
-        timeout.tv_sec = now.tv_sec + timeout_seconds;
-        timeout.tv_nsec = 0;
+        bip_receive(&bbmd_reply_src, bbmd_reply_mtu, sizeof(bbmd_reply_mtu), 100);
         pthread_mutex_lock (&mutex);
-        pthread_cond_timedwait (&cond, &mutex, &timeout);
         bool received_response = bbmd_reg != BBMD_REG_UNSET;
         pthread_mutex_unlock (&mutex);
         if (received_response) break;
-        timeout_count++;
     }
 
-    pthread_cond_destroy(&cond);
     pthread_mutex_destroy(&mutex);
 
     /* Fail if the BBMD registration was not successful */
