@@ -38,6 +38,7 @@
 #include <string.h> /* for memcpy */
 #include <pthread.h>
 #include <sys/time.h>
+#include <time.h>
 #include "bacnet/bacdcode.h"
 #include "bacnet/datalink/bip.h"
 #include "bacnet/datalink/bvlc.h"
@@ -100,9 +101,16 @@ typedef enum
   BBMD_REG_SUCCESS
 } bbmd_reg_t;
 
-/** Mutex and condition variable for checking if BBMD registration has been successful */
-static pthread_mutex_t mutex;
-static pthread_cond_t cond;
+/** Mutex and condition variable for checking if BBMD registration has been
+ * successful. Statically initialized (not pthread_*_init()'d at runtime)
+ * because the BVLC_RESULT handler below locks/signals them unconditionally
+ * on any incoming BVLC_RESULT, including one that arrives before
+ * bvlc_register_with_bbmd() is ever called -- using them before a runtime
+ * init would be undefined behavior otherwise. Never destroyed, for the
+ * same reason: they must stay valid for the life of the process, not just
+ * for the duration of one registration attempt. */
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static bbmd_reg_t bbmd_reg;
 
 /**
@@ -1160,40 +1168,75 @@ int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
     BVLC_Buffer_Len = bvlc_encode_register_foreign_device(
         &BVLC_Buffer[0], sizeof(BVLC_Buffer), ttl_seconds);
 
-    pthread_mutex_init (&mutex, NULL);
-
     pthread_mutex_lock (&mutex);
     /* Set the initial value of the BBMD registration bool to false */
     bbmd_reg = BBMD_REG_UNSET;
     pthread_mutex_unlock (&mutex);
-
-    /* Setup a 30 second condition variable wait */
-    pthread_cond_init (&cond, NULL);
-    time_t timeout_seconds = 3;
-    struct timeval now;
-    struct timespec timeout;
-    int timeout_count = 0;
 
     int retval = bip_send_mpdu(bbmd_addr, &BVLC_Buffer[0], BVLC_Buffer_Len);
     if (retval == -1)
     {
         return retval;
     }
-    while (timeout_count < 10)
+
+    bool received_response = false;
+    time_t start = time(NULL);
+    time_t deadline = start + 30;
+
+    /* Phase 1: give whatever's already reading this socket -- e.g. a
+     * caller's own pre-existing receive thread, such as
+     * device-bacnet-c-private's receive_data(), which starts before it
+     * ever registers -- the normal signal path's chance to deliver the
+     * reply first. As long as something else is already pumping
+     * bip_receive() in a loop, that path works correctly and never
+     * competes with it for datagrams on the socket, exactly as it always
+     * has. A short, bounded grace period is enough: on a real network an
+     * already-running receive thread signals within well under a second
+     * of the BBMD's reply arriving. */
+    time_t grace_deadline = start + 2;
+    while (!received_response && time(NULL) < grace_deadline)
     {
+        struct timeval now;
+        struct timespec timeout;
         gettimeofday (&now, NULL);
-        timeout.tv_sec = now.tv_sec + timeout_seconds;
-        timeout.tv_nsec = 0;
+        timeout.tv_sec = now.tv_sec;
+        timeout.tv_nsec = (now.tv_usec + 250000) * 1000;
+        if (timeout.tv_nsec >= 1000000000)
+        {
+            timeout.tv_sec += 1;
+            timeout.tv_nsec -= 1000000000;
+        }
         pthread_mutex_lock (&mutex);
         pthread_cond_timedwait (&cond, &mutex, &timeout);
-        bool received_response = bbmd_reg != BBMD_REG_UNSET;
+        received_response = bbmd_reg != BBMD_REG_UNSET;
         pthread_mutex_unlock (&mutex);
-        if (received_response) break;
-        timeout_count++;
     }
 
-    pthread_cond_destroy(&cond);
-    pthread_mutex_destroy(&mutex);
+    /* Phase 2: nobody signaled us within the grace period, which is the
+     * signature of a caller -- like bacnet-sim, which calls this
+     * synchronously from main() before starting any receive loop -- that
+     * has no other thread pumping the socket and so no way to ever be
+     * signaled by the normal path. Only now poll bip_receive() ourselves:
+     * it invokes bvlc_handler() internally on any packet received, which
+     * is what actually sets bbmd_reg. This does compete with any other
+     * reader of the socket for whichever datagram the OS hands to
+     * whichever caller asks first -- a real risk in general, since the
+     * loser silently drops a datagram that never reaches bvlc_handler()
+     * for anything but this fallback's own narrow use, but fine here
+     * because phase 1 already established nothing else is claiming
+     * datagrams from this socket. */
+    if (!received_response)
+    {
+        BACNET_ADDRESS bbmd_reply_src = { 0 };
+        uint8_t bbmd_reply_mtu[MAX_MPDU] = { 0 };
+        while (!received_response && time(NULL) < deadline)
+        {
+            bip_receive(&bbmd_reply_src, bbmd_reply_mtu, sizeof(bbmd_reply_mtu), 100);
+            pthread_mutex_lock (&mutex);
+            received_response = bbmd_reg != BBMD_REG_UNSET;
+            pthread_mutex_unlock (&mutex);
+        }
+    }
 
     /* Fail if the BBMD registration was not successful */
     if (bbmd_reg != BBMD_REG_SUCCESS)
