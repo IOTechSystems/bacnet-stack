@@ -1160,10 +1160,14 @@ int bvlc_handler(BACNET_IP_ADDRESS *addr,
  *         0 if no registration request is sent, or
  *         -1 if registration fails.
  */
-int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
+/* Shared by bvlc_register_with_bbmd() and bvlc_register_with_bbmd_async():
+ * marks bbmd_addr as our BBMD (so outbound broadcasts route through it via
+ * bvlc_send_pdu()'s Remote_BBMD.port check, immediately -- see that
+ * function -- regardless of whether this registration is ever ACKed),
+ * resets the registration status, and sends the request. Returns whatever
+ * bip_send_mpdu() returns. */
+static int send_register_foreign_device_request(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
 {
-    /* Store the BBMD address and port so that we won't broadcast locally. */
-    /* We are a foreign device! */
     bvlc_address_copy(&Remote_BBMD, bbmd_addr);
     BVLC_Buffer_Len = bvlc_encode_register_foreign_device(
         &BVLC_Buffer[0], sizeof(BVLC_Buffer), ttl_seconds);
@@ -1173,69 +1177,94 @@ int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
     bbmd_reg = BBMD_REG_UNSET;
     pthread_mutex_unlock (&mutex);
 
-    int retval = bip_send_mpdu(bbmd_addr, &BVLC_Buffer[0], BVLC_Buffer_Len);
+    return bip_send_mpdu(bbmd_addr, &BVLC_Buffer[0], BVLC_Buffer_Len);
+}
+
+/**
+ * Sends a Register-Foreign-Device request and returns immediately --
+ * does not wait for the BVLC-Result ACK/NAK. Intended for a caller (such
+ * as bacnet-sim) that is single-threaded and hasn't started its own
+ * receive loop yet at the point it registers: unlike
+ * bvlc_register_with_bbmd(), this never itself reads the socket, so it
+ * introduces no risk of stealing a datagram from whatever receive loop
+ * the caller starts afterward. Poll bvlc_bbmd_registration_status()
+ * once that loop is running to find out whether it actually succeeded.
+ *
+ * @param bbmd_addr - BBMD address to register with
+ * @param ttl_seconds - lease time to request
+ * @return Upon successful completion (of the *send*, not the
+ *  registration itself -- see bvlc_bbmd_registration_status()), returns
+ *  the number of bytes sent. Otherwise, -1 shall be returned.
+ */
+int bvlc_register_with_bbmd_async(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
+{
+    return send_register_foreign_device_request(bbmd_addr, ttl_seconds);
+}
+
+/**
+ * Reports the outcome of the most recent bvlc_register_with_bbmd_async()
+ * call. Thread-safe; cheap enough to poll from a main loop.
+ *
+ * @return BVLC_BBMD_REGISTRATION_PENDING if no BVLC-Result has been
+ *  processed yet (call again later, once the caller's own receive loop
+ *  has had a chance to run), BVLC_BBMD_REGISTRATION_FAILED or
+ *  BVLC_BBMD_REGISTRATION_SUCCEEDED once one has.
+ */
+BVLC_BBMD_REGISTRATION_STATUS bvlc_bbmd_registration_status(void)
+{
+    pthread_mutex_lock (&mutex);
+    bbmd_reg_t status = bbmd_reg;
+    pthread_mutex_unlock (&mutex);
+
+    switch (status)
+    {
+        case BBMD_REG_SUCCESS:
+            return BVLC_BBMD_REGISTRATION_SUCCEEDED;
+        case BBMD_REG_FAIL:
+            return BVLC_BBMD_REGISTRATION_FAILED;
+        case BBMD_REG_UNSET:
+        default:
+            return BVLC_BBMD_REGISTRATION_PENDING;
+    }
+}
+
+/**
+ * Sends a Register-Foreign-Device request and blocks for up to 30
+ * seconds waiting for the BVLC-Result ACK/NAK.
+ *
+ * This wait relies on something else already reading this socket in a
+ * loop -- e.g. a caller's own pre-existing receive thread, such as
+ * device-bacnet-c-private's receive_data(), which starts before it ever
+ * registers -- to deliver the reply via bvlc_handler()'s normal signal
+ * path. A single-threaded caller with no such loop running yet at the
+ * point it registers (e.g. bacnet-sim, calling this from main() before
+ * starting its own receive loop) has nothing to signal it and will
+ * simply time out here even on a genuinely successful registration; such
+ * a caller should use bvlc_register_with_bbmd_async() +
+ * bvlc_bbmd_registration_status() instead, which never blocks and so
+ * never depends on anything else servicing the socket concurrently.
+ */
+int bvlc_register_with_bbmd(BACNET_IP_ADDRESS *bbmd_addr, uint16_t ttl_seconds)
+{
+    int retval = send_register_foreign_device_request(bbmd_addr, ttl_seconds);
     if (retval == -1)
     {
         return retval;
     }
 
     bool received_response = false;
-    time_t start = time(NULL);
-    time_t deadline = start + 30;
-
-    /* Phase 1: give whatever's already reading this socket -- e.g. a
-     * caller's own pre-existing receive thread, such as
-     * device-bacnet-c-private's receive_data(), which starts before it
-     * ever registers -- the normal signal path's chance to deliver the
-     * reply first. As long as something else is already pumping
-     * bip_receive() in a loop, that path works correctly and never
-     * competes with it for datagrams on the socket, exactly as it always
-     * has. A short, bounded grace period is enough: on a real network an
-     * already-running receive thread signals within well under a second
-     * of the BBMD's reply arriving. */
-    time_t grace_deadline = start + 2;
-    while (!received_response && time(NULL) < grace_deadline)
+    time_t deadline = time(NULL) + 30;
+    while (!received_response && time(NULL) < deadline)
     {
         struct timeval now;
         struct timespec timeout;
         gettimeofday (&now, NULL);
-        timeout.tv_sec = now.tv_sec;
-        timeout.tv_nsec = (now.tv_usec + 250000) * 1000;
-        if (timeout.tv_nsec >= 1000000000)
-        {
-            timeout.tv_sec += 1;
-            timeout.tv_nsec -= 1000000000;
-        }
+        timeout.tv_sec = now.tv_sec + 1;
+        timeout.tv_nsec = now.tv_usec * 1000;
         pthread_mutex_lock (&mutex);
         pthread_cond_timedwait (&cond, &mutex, &timeout);
         received_response = bbmd_reg != BBMD_REG_UNSET;
         pthread_mutex_unlock (&mutex);
-    }
-
-    /* Phase 2: nobody signaled us within the grace period, which is the
-     * signature of a caller -- like bacnet-sim, which calls this
-     * synchronously from main() before starting any receive loop -- that
-     * has no other thread pumping the socket and so no way to ever be
-     * signaled by the normal path. Only now poll bip_receive() ourselves:
-     * it invokes bvlc_handler() internally on any packet received, which
-     * is what actually sets bbmd_reg. This does compete with any other
-     * reader of the socket for whichever datagram the OS hands to
-     * whichever caller asks first -- a real risk in general, since the
-     * loser silently drops a datagram that never reaches bvlc_handler()
-     * for anything but this fallback's own narrow use, but fine here
-     * because phase 1 already established nothing else is claiming
-     * datagrams from this socket. */
-    if (!received_response)
-    {
-        BACNET_ADDRESS bbmd_reply_src = { 0 };
-        uint8_t bbmd_reply_mtu[MAX_MPDU] = { 0 };
-        while (!received_response && time(NULL) < deadline)
-        {
-            bip_receive(&bbmd_reply_src, bbmd_reply_mtu, sizeof(bbmd_reply_mtu), 100);
-            pthread_mutex_lock (&mutex);
-            received_response = bbmd_reg != BBMD_REG_UNSET;
-            pthread_mutex_unlock (&mutex);
-        }
     }
 
     /* Fail if the BBMD registration was not successful */

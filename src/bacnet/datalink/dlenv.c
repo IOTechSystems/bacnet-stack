@@ -111,18 +111,16 @@ int dlenv_bbmd_result(void)
  *         0 if no registration request is sent, or
  *         -1 if registration fails.
  */
-int dlenv_register_as_foreign_device(void)
-{
-    int retval = 0;
 #if defined(BACDL_BIP)
-    bool bdt_entry_valid = false;
-    uint16_t bdt_entry_port = 0;
-    char *pEnv = NULL;
-    unsigned a[4] = { 0 };
-    char bbmd_env[32] = "";
-    unsigned entry_number = 0;
-    long long_value = 0;
-    int c;
+/* Reads BACNET_BBMD_ADDRESS/PORT/TIMETOLIVE into the BBMD_Address /
+ * BBMD_TTL_Seconds / BBMD_Address_Valid statics above. Shared by
+ * dlenv_register_as_foreign_device() and
+ * dlenv_register_as_foreign_device_async() so their env-var handling
+ * can't drift apart. */
+static void bbmd_env_config(void)
+{
+    char *pEnv;
+    long long_value;
 
     pEnv = getenv("BACNET_BBMD_PORT");
     if (pEnv) {
@@ -146,6 +144,62 @@ int dlenv_register_as_foreign_device(void)
     if (pEnv) {
         BBMD_Address_Valid = bip_get_addr_by_name(pEnv, &BBMD_Address);
     }
+}
+
+/**
+ * Non-blocking counterpart to dlenv_register_as_foreign_device(): reads
+ * the same BACNET_BBMD_* environment variables, sends the
+ * Register-Foreign-Device request, and returns immediately -- it never
+ * waits for or logs the outcome. Intended for a single-threaded caller
+ * (e.g. bacnet-sim) that hasn't started its own receive loop yet at the
+ * point it registers: start that loop right after this call returns,
+ * then poll bvlc_bbmd_registration_status() (h_bbmd.h) once it's running
+ * to find out whether registration actually succeeded.
+ *
+ * Only covers the initial registration, not
+ * dlenv_maintenance_timer()'s periodic re-registration, which still
+ * calls the blocking dlenv_register_as_foreign_device() -- a
+ * single-threaded caller using this function for startup should be
+ * aware periodic renewal can hit the same wait bvlc_register_with_bbmd()
+ * exists to work around, just far less often (BACNET_BBMD_TIMETOLIVE,
+ * default 60000s).
+ *
+ * @return Positive number (of bytes sent) on a successful send, 0 if no
+ *  registration request is sent (BACNET_BBMD_ADDRESS unconfigured), or
+ *  -1 if the send itself failed.
+ */
+int dlenv_register_as_foreign_device_async(void)
+{
+    int retval = 0;
+    bbmd_env_config();
+    if (BBMD_Address_Valid) {
+        fprintf(stderr,
+            "Trying to register with BBMD at %u.%u.%u.%u:%u with TTL of %u seconds\n",
+            (unsigned)BBMD_Address.address[0],
+            (unsigned)BBMD_Address.address[1],
+            (unsigned)BBMD_Address.address[2],
+            (unsigned)BBMD_Address.address[3], (unsigned)BBMD_Address.port,
+            (unsigned)BBMD_TTL_Seconds);
+        retval = bvlc_register_with_bbmd_async(&BBMD_Address, BBMD_TTL_Seconds);
+        BBMD_Timer_Seconds = (uint16_t)BBMD_TTL_Seconds;
+    }
+    return retval;
+}
+#endif
+
+int dlenv_register_as_foreign_device(void)
+{
+    int retval = 0;
+#if defined(BACDL_BIP)
+    bool bdt_entry_valid = false;
+    uint16_t bdt_entry_port = 0;
+    char *pEnv = NULL;
+    unsigned a[4] = { 0 };
+    char bbmd_env[32] = "";
+    unsigned entry_number = 0;
+    int c;
+
+    bbmd_env_config();
     if (BBMD_Address_Valid) {
             fprintf(stderr,
                 "Trying to register with BBMD at %u.%u.%u.%u:%u with TTL of %u seconds\n",
@@ -360,6 +414,45 @@ void dlenv_maintenance_timer(uint16_t elapsed_seconds)
             BBMD_Timer_Seconds = (uint16_t)BBMD_TTL_Seconds;
         }
     }
+#endif
+}
+
+/**
+ * Non-blocking counterpart to dlenv_maintenance_timer(): identical TTL
+ * countdown and renewal trigger, but fires
+ * dlenv_register_as_foreign_device_async() instead of the blocking
+ * dlenv_register_as_foreign_device() once the TTL expires. For a
+ * single-threaded caller (e.g. bacnet-sim) using the async registration
+ * API throughout, so periodic renewal doesn't hit the same wait
+ * bvlc_register_with_bbmd() blocks on -- one with no receive loop
+ * running concurrently has nothing to signal it. Call this instead of
+ * dlenv_maintenance_timer(), not in addition to it.
+ *
+ * @param elapsed_seconds Number of seconds that have elapsed since last
+ *  called.
+ * @return true if a new registration request was just sent this call --
+ *  poll bvlc_bbmd_registration_status() for the outcome. false
+ *  otherwise (nothing due yet, or unconfigured).
+ */
+bool dlenv_maintenance_timer_async(uint16_t elapsed_seconds)
+{
+#if defined(BACDL_BIP)
+    if (BBMD_Timer_Seconds) {
+        if (BBMD_Timer_Seconds <= elapsed_seconds) {
+            BBMD_Timer_Seconds = 0;
+        } else {
+            BBMD_Timer_Seconds -= elapsed_seconds;
+        }
+        if (BBMD_Timer_Seconds == 0) {
+            (void)dlenv_register_as_foreign_device_async();
+            BBMD_Timer_Seconds = (uint16_t)BBMD_TTL_Seconds;
+            return true;
+        }
+    }
+    return false;
+#else
+    (void)elapsed_seconds;
+    return false;
 #endif
 }
 
