@@ -55,9 +55,10 @@ extern "C" {
 
     /* Non-blocking counterpart -- see its comment in dlenv.c. Call this
      * instead of dlenv_maintenance_timer() above, not in addition to
-     * it, for a caller using the async registration API. */
+     * it, for a caller using the async registration API. Same return
+     * contract as dlenv_register_as_foreign_device_async(). */
     BACNET_STACK_EXPORT
-    bool dlenv_maintenance_timer_async(
+    int dlenv_maintenance_timer_async(
         uint16_t elapsed_seconds);
 
     BACNET_STACK_EXPORT

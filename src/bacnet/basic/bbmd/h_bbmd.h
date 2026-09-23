@@ -97,9 +97,11 @@ int bvlc_register_with_bbmd(
  * request and returns immediately, without waiting for or polling for
  * the ACK/NAK itself. For a single-threaded caller that hasn't started
  * its own receive loop yet at the point it registers (e.g. bacnet-sim),
- * this avoids bvlc_register_with_bbmd()'s self-polling fallback ever
- * needing to run: start your receive loop right after this call
- * returns, and check bvlc_bbmd_registration_status() once it's running.
+ * this avoids bvlc_register_with_bbmd()'s blocking wait entirely --
+ * that wait depends on something else already reading the socket to
+ * signal it, which such a caller has no way to provide. Start your
+ * receive loop right after this call returns, and check
+ * bvlc_bbmd_registration_status() once it's running.
  */
 BACNET_STACK_EXPORT
 int bvlc_register_with_bbmd_async(
