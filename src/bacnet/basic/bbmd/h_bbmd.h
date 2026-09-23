@@ -93,6 +93,32 @@ BACNET_STACK_EXPORT
 int bvlc_register_with_bbmd(
     BACNET_IP_ADDRESS *address, uint16_t time_to_live_seconds);
 
+/* Non-blocking counterpart to bvlc_register_with_bbmd(): sends the
+ * request and returns immediately, without waiting for or polling for
+ * the ACK/NAK itself. For a single-threaded caller that hasn't started
+ * its own receive loop yet at the point it registers (e.g. bacnet-sim),
+ * this avoids bvlc_register_with_bbmd()'s blocking wait entirely --
+ * that wait depends on something else already reading the socket to
+ * signal it, which such a caller has no way to provide. Start your
+ * receive loop right after this call returns, and check
+ * bvlc_bbmd_registration_status() once it's running.
+ */
+BACNET_STACK_EXPORT
+int bvlc_register_with_bbmd_async(
+    BACNET_IP_ADDRESS *address, uint16_t time_to_live_seconds);
+
+typedef enum
+{
+    BVLC_BBMD_REGISTRATION_PENDING,
+    BVLC_BBMD_REGISTRATION_FAILED,
+    BVLC_BBMD_REGISTRATION_SUCCEEDED
+} BVLC_BBMD_REGISTRATION_STATUS;
+
+/* Outcome of the most recent bvlc_register_with_bbmd_async() call. See
+ * its comment above. */
+BACNET_STACK_EXPORT
+BVLC_BBMD_REGISTRATION_STATUS bvlc_bbmd_registration_status(void);
+
 /* Local interface to manage BBMD.
  * The interface user needs to handle mutual exclusion if needed i.e.
  * BACnet packet is not being handled when the BBMD table is modified.

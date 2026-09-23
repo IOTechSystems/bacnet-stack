@@ -43,8 +43,22 @@ extern "C" {
     int dlenv_register_as_foreign_device(
         void);
 
+    /* Non-blocking counterpart -- see its comment in dlenv.c. Pair with
+     * dlenv_maintenance_timer_async() below for periodic renewal too. */
+    BACNET_STACK_EXPORT
+    int dlenv_register_as_foreign_device_async(
+        void);
+
     BACNET_STACK_EXPORT
     void dlenv_maintenance_timer(
+        uint16_t elapsed_seconds);
+
+    /* Non-blocking counterpart -- see its comment in dlenv.c. Call this
+     * instead of dlenv_maintenance_timer() above, not in addition to
+     * it, for a caller using the async registration API. Same return
+     * contract as dlenv_register_as_foreign_device_async(). */
+    BACNET_STACK_EXPORT
+    int dlenv_maintenance_timer_async(
         uint16_t elapsed_seconds);
 
     BACNET_STACK_EXPORT
